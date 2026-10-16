@@ -1,3 +1,4 @@
+import {normalizeLinks} from './links.js';
 import {randomUUID} from 'node:crypto';
 import {fail} from './store.js';
 export const layouts = ['wall','grid','columns','stream'];
@@ -51,9 +52,12 @@ export function settings(b,u,body) {
     b.maxPostsPerStudent=body.maxPostsPerStudent;
   }
 }
-function content(body,b) {
+function content(body,b,previous) {
   const color=['cream','blue','pink','green'].includes(body.color)?body.color:'cream';
-  return {title:text(body.title||'',160),body:text(body.body||'',10000,true),section:b.sections.includes(body.section)?body.section:b.sections[0],color};
+  const links=normalizeLinks(body.links===undefined?(previous?.links||[]).map(link=>link.url):body.links);
+  const message=text(body.body||'',10000);
+  if(!message&&!links.length)fail(400,'請填寫內容或至少加入一個網址。');
+  return {links,title:text(body.title||'',160),body:message,section:b.sections.includes(body.section)?body.section:b.sections[0],color};
 }
 export function addPost(b,u,body) {
   writable(b,u); if (b.ownerId!==u.id && b.maxPostsPerStudent>0 && b.posts.filter(p=>!p.deleted&&p.authorId===u.id).length>=b.maxPostsPerStudent) fail(403,'您已達每人發文上限。');
@@ -64,7 +68,7 @@ export function addPost(b,u,body) {
 }
 export function editPost(b,u,id,body) {
   const p=editable(b,u,id); if(p.version!==body.version) fail(409,'貼文已被修改，請重新整理後再編輯。');
-  Object.assign(p,content(body,b)); p.version++;
+  Object.assign(p,content(body,b,p)); p.version++;
   p.status=body.uploadPending?'uploading':b.moderation&&b.ownerId!==u.id?'pending':'published';
   return {id:p.id};
 }
@@ -121,8 +125,8 @@ export function csvCell(value) {
 }
 export function exportCsv(b,u) {
   owner(b,u);
-  const rows=[['作者','標題','內容','分區','發布時間（臺灣）','喜歡數','留言數','附件數']];
+  const rows=[['作者','標題','內容','分區','發布時間（臺灣）','喜歡數','留言數','附件數','網址']];
   for(const p of b.posts.filter(p=>!p.deleted&&p.status==='published'))rows.push([p.authorName,p.title,p.body,p.section,
-    new Date(p.createdAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false}),p.likes.length,p.comments.length,p.attachments.length]);
+    new Date(p.createdAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false}),p.likes.length,p.comments.length,p.attachments.length,(p.links||[]).map(l=>l.url).join('\n')]);
   return '\uFEFF'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
 }

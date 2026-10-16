@@ -16,7 +16,7 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
   app.disable('x-powered-by');
   app.use((req,res,next)=>{
     res.set({'X-Content-Type-Options':'nosniff','Referrer-Policy':'same-origin','X-Frame-Options':'DENY',
-      'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});
+      'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; frame-src https://www.youtube-nocookie.com; media-src https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});
     if(req.path.startsWith('/api')||req.path.startsWith('/auth'))res.set('Cache-Control','no-store');
     if(!['GET','HEAD','OPTIONS'].includes(req.method) && req.get('origin')!==config.baseUrl) return next(Object.assign(new Error('請從本站頁面操作。'),{status:403}));
     req.user=store.session(cookies(req).gp_session);
@@ -36,9 +36,9 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
   registerAuth(app,store,config);
   app.get('/api/session',(req,res)=>{
     const u=req.user;
-    res.json({version:'0.2.0',demo:config.demo,user:u?{id:u.id,name:u.name,email:u.email,teacher:u.teacher,driveConnected:config.demo||!!u.credentials}:null});
+    res.json({version:'0.3.0',demo:config.demo,user:u?{id:u.id,name:u.name,email:u.email,teacher:u.teacher,driveConnected:config.demo||!!u.credentials}:null});
   });
-  app.get('/healthz',(req,res)=>res.json({ok:true,version:'0.2.0'}));
+  app.get('/healthz',(req,res)=>res.json({ok:true,version:'0.3.0'}));
   app.use('/api',(req,res,next)=>{if(!req.user)return res.status(401).json({error:'請先登入。'});next();});
   const publish=id=>{
     for(const s of streams)if(s.boardId===id){

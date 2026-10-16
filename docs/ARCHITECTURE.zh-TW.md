@@ -35,7 +35,7 @@
 - OAuth callback 驗證 ID token 的簽章、audience、issuer、expiry 與 nonce。
 - 學生不能讀取教師 OAuth 憑證；tokens AES-GCM 加密，金鑰不在資料庫。
 - 附件以 `/api/boards/.../attachments/...` 代理，每次重新檢查權限；不建立公開 Drive ACL。
-- 使用純文字內文與 HTML escaping；不接受 HTML、SVG、任意腳本或遠端 URL 預覽。
+- 使用純文字內文與 HTML escaping；不接受 HTML、SVG、任意腳本；遠端網址不抓取 metadata。YouTube iframe 與媒體元素由程式依驗證過的網址產生。
 - Session 8 小時到期；正式 HTTPS cookie 設 Secure、HttpOnly、SameSite=Lax。
 - SSE 會定時驗證 session／權限；內容事件只包含失效通知。
 - 已下載到學生裝置的內容無法遠端收回；學校端權限變更阻止後續讀取。
@@ -77,3 +77,9 @@ Board 新增可選 lifecycle（active/archived/trashed）、deadlineAt（UTC ISO
 封存與回收是應用程式狀態，會寫入 Drive 快照，但不改 Drive 垃圾桶旗標。還原不清空原截止與凍結設定。模板複製只帶教學設定，產生新 boardId，Drive 同步依新 ID 建立獨立資料夾。
 
 發文上限計算未刪除的學生貼文（含 pending/uploading），在同一寫入 transaction 內檢查；教師可還原超出目前上限的歷史作品，但學生仍不能繼續新增。截止時間以伺服器判斷為準，學生即使保留截止前頁面也無法繞過。
+
+## v0.3.0 網址欄位
+
+Post 新增可選 links 陣列，包含 url、kind、host；YouTube 額外含 videoId/startSeconds。新增／編輯僅接受網址字串陣列，所有衍生欄位由 server/links.js 產生。舊資料沒有 links 時視為空陣列。
+
+瀏覽器按載入才建立 iframe/audio/video；一般 SSE 更新會先確認正在播放的貼文及連結仍可讀，再延後重繪。URL 原檔不進入 Drive，權限僅控制程式內貼文可見性；已取得的公開來源連結無法遠端收回。

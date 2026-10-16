@@ -1,12 +1,22 @@
 # Google Padlet
 
-**v0.2.0｜教師 Google Drive 互動牆・開發預覽版**
+**v0.3.0｜教師 Google Drive 互動牆・開發預覽版**
 
 一面牆，收藏全班的觀察、作品與回饋。教師使用自己的 Google 帳號連接 Drive，每面互動牆對應 `Google Padlet / 互動牆名稱` 資料夾。
 
 作者：板橋國小 楊凱文。這是自主開發專案，並非 Google 或 Padlet 官方產品。
 
 > 本版已實作可執行的前後端、Google OAuth 與 Drive API 串接；尚未使用實際學校 OAuth 憑證完成端到端驗收。上線前請依 [部署教學](docs/DEPLOYMENT.zh-TW.md) 設定並驗收。**不是完整 Padlet 替代品，也不是 Apps Script / GitHub Pages 靜態網站。**
+
+## v0.3.0 新增：網址與影音
+
+- 每篇最多 5 個網址，可只分享連結。
+- 自動辨識 YouTube 一般／短網址／Shorts／live；點選載入嵌入播放器。
+- HTTPS MP4/WebM 影片與 MP3/M4A/OGG/WAV 音訊直連播放器。
+- 一般網址連結卡片、草稿保留、網址搜尋、CSV 網址欄。
+- 播放時提示遠端更新，避免一般更新中斷播放；權限撤回仍立即生效。
+
+詳見 [v0.3.0 操作說明](docs/V0.3.zh-TW.md)。外部網址只保存連結，不會下載影音原檔到 Drive；實際播放仍需來源允許與網路支援。
 
 ## v0.2.0 新增
 
