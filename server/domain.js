@@ -34,6 +34,7 @@ export function settings(b,u,body) {
   if (!layouts.includes(body.layout)) fail(400,'不支援的版型。'); b.layout=body.layout;
   if (typeof body.moderation!=='boolean' || typeof body.frozen!=='boolean') fail(400,'設定格式不正確。');
   b.moderation=body.moderation; b.frozen=body.frozen;
+  if(body.votingEnabled!==undefined){if(typeof body.votingEnabled!=='boolean')fail(400,'投票設定格式錯誤。');b.votingEnabled=body.votingEnabled;}
   const domain=text(body.domain,253,true).toLowerCase();
   if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) fail(400,'網域格式不正確。'); b.domain=domain;
   if (!Array.isArray(body.allowedEmails) || body.allowedEmails.length>500) fail(400,'名單最多 500 人。');
@@ -92,8 +93,8 @@ export function setLike(b,u,id,body) {
 }
 export function publicBoard(b,u,row,demo=false) {
   access(b,u); const own=b.ownerId===u.id;
-  return {...b,lifecycle:b.lifecycle||'active',deadlineAt:b.deadlineAt||null,maxPostsPerStudent:b.maxPostsPerStudent||0,allowedEmails:own?b.allowedEmails:[],
-    posts:b.posts.filter(p=>!p.deleted&&(p.status==='published'||own||p.authorId===u.id)).map(p=>({...p,likes:undefined,likeCount:p.likes.length,liked:p.likes.includes(u.id),
+  return {...b,votes:undefined,votingEnabled:!!b.votingEnabled,background:b.background?{id:b.background.id,name:b.background.name,mode:b.background.mode}:null,lifecycle:b.lifecycle||'active',deadlineAt:b.deadlineAt||null,maxPostsPerStudent:b.maxPostsPerStudent||0,allowedEmails:own?b.allowedEmails:[],
+    posts:b.posts.filter(p=>!p.deleted&&(p.status==='published'||own||p.authorId===u.id)).map(p=>({...p,likes:undefined,likeCount:p.likes.length,liked:p.likes.includes(u.id),voteCount:Object.values(b.votes||{}).filter(id=>id===p.id).length,voted:b.votes?.[u.id]===p.id,
       attachments:p.attachments.map(({driveId,localPath,...a})=>a)})),
     isOwner:own,sync: own?{demo,version:row.sync_version,current:row.version,error:row.sync_error,folderId:JSON.parse(row.drive).folderId||null}:{demo}};
 }
@@ -125,8 +126,29 @@ export function csvCell(value) {
 }
 export function exportCsv(b,u) {
   owner(b,u);
-  const rows=[['作者','標題','內容','分區','發布時間（臺灣）','喜歡數','留言數','附件數','網址']];
+  const rows=[['作者','標題','內容','分區','發布時間（臺灣）','喜歡數','票數','留言數','附件數','網址']];
   for(const p of b.posts.filter(p=>!p.deleted&&p.status==='published'))rows.push([p.authorName,p.title,p.body,p.section,
-    new Date(p.createdAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false}),p.likes.length,p.comments.length,p.attachments.length,(p.links||[]).map(l=>l.url).join('\n')]);
+    new Date(p.createdAt).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false}),p.likes.length,Object.values(b.votes||{}).filter(id=>id===p.id).length,p.comments.length,p.attachments.length,(p.links||[]).map(l=>l.url).join('\n')]);
   return '\uFEFF'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
+}
+
+export function reorderPost(b,u,body) {
+  owner(b,u);writable(b,u);
+  if(body.version!==b.version)fail(409,'貼文順序已更新，請重新整理後再排序。');
+  const p=postFor(b,u,body.postId),target=postFor(b,u,body.targetId);
+  if(p.id===target.id)fail(400,'請選擇其他貼文作為排序位置。');
+  if(!['before','after'].includes(body.position))fail(400,'排序位置不正確。');
+  b.posts=b.posts.filter(x=>x.id!==p.id);
+  b.posts.splice(b.posts.findIndex(x=>x.id===target.id)+(body.position==='after'?1:0),0,p);
+  if(body.moveSection===true){p.section=target.section;p.version++;}
+}
+
+export function setVote(b,u,id,body){
+  writable(b,u);
+  if(!b.votingEnabled)fail(403,'教師尚未開啟投票，或已結束投票。');
+  const p=postFor(b,u,id);if(p.status!=='published')fail(400,'只能投票給已發布的貼文。');
+  if(typeof body.voted!=='boolean')fail(400,'投票格式錯誤。');
+  b.votes||={};
+  if(body.voted)b.votes[u.id]=p.id;
+  else if(b.votes[u.id]===p.id)delete b.votes[u.id];
 }

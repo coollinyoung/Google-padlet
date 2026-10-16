@@ -7,7 +7,7 @@ function startSeconds(value){
   return m&&m[0]?Math.min(Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0),604800):0;
 }
 export function normalizeLinks(input=[]){
-  if(!Array.isArray(input)||input.length>5)fail(400,'每篇最多 5 個網址，請逐行貼上。');
+  if(!Array.isArray(input)||input.length>20)fail(400,'每篇最多 20 個網址，請逐行貼上。');
   const result=[],seen=new Set();
   for(const raw of input){
     if(typeof raw!=='string'||raw.length>2048||!raw.trim()||/[\u0000-\u001f\u007f]/.test(raw))fail(400,'網址格式錯誤或超過 2,048 字元。');

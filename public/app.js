@@ -1,6 +1,6 @@
 const $=s=>document.querySelector(s),app=$('#app'),dialog=$('#dialog');
 const labels={wall:'牆面',grid:'網格',columns:'分欄',stream:'串流'};
-let boardFilter='active',accessEpoch=0;
+let boardFilter='active',accessEpoch=0,dragState=null;
 const lifecycleLabels={active:'使用中',archived:'已封存',trashed:'回收站'};
 function canWrite(){return board?.lifecycle==='active'&&(board.isOwner||(!board.frozen&&(!board.deadlineAt||Date.now()<Date.parse(board.deadlineAt))));}
 function taipeiInput(value){return value?new Date(Date.parse(value)+8*3600000).toISOString().slice(0,16):'';}
@@ -9,8 +9,8 @@ const expanded=new Set(),activeEmbeds=new Map();
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const date=x=>new Date(x).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Taipei'});
 function toast(message){$('#toast').textContent=message;$('#toast').style.display='block';clearTimeout(timer);timer=setTimeout(()=>$('#toast').style.display='none',4500);}
-async function api(url,{method='GET',body,key=crypto.randomUUID()}={}){
-  const options={method,headers:{}};
+async function api(url,{method='GET',body,key=crypto.randomUUID(),headers={}}={}){
+  const options={method,headers:{...headers}};
   if(method!=='GET')options.headers['Idempotency-Key']=key;
   if(body instanceof FormData)options.body=body;
   else if(body!==undefined){options.headers['Content-Type']='application/json';options.body=JSON.stringify(body);}
@@ -36,8 +36,9 @@ async function home(){
 }
 function renderBoards(query){$('#board-list').innerHTML=boards.filter(b=>(b.lifecycle||'active')===boardFilter&&(b.title+b.description).includes(query)).map(b=>`<a class="board-card" href="/?board=${encodeURIComponent(b.id)}"><div class="board-cover" aria-hidden="true"><span></span><span></span><span></span></div><div class="board-info"><h3>${esc(b.title)}</h3><p>${esc(b.description.slice(0,90)||'一起留下今天的新發現。')}</p><div class="board-meta"><span>${b.isOwner?'我的牆':'已加入'} · ${lifecycleLabels[b.lifecycle||'active']} · ${labels[b.layout]}${b.frozen?' · 已凍結':''}</span><span>${date(b.updatedAt)}</span></div></div></a>`).join('')||'<div class="empty"><span class="symbol">✦</span><h3>這裡準備好收藏新想法了</h3><p class="muted">教師可以建立第一面牆；學生請使用老師提供的活動連結。</p></div>';}
 async function loadBoard(id,preservePlayers=false){
+  if(dragState&&preservePlayers){pendingRefresh=true;return;}
   if(loading){pendingRefresh=true;return;}loading=true;const epoch=accessEpoch;
-  try{const data=await api('/api/boards/'+encodeURIComponent(id));if(epoch!==accessEpoch)return;
+  try{const data=await api('/api/boards/'+encodeURIComponent(id));if(epoch!==accessEpoch)return;if(dragState&&preservePlayers){pendingRefresh=true;return;}
     if(preservePlayers&&activeEmbeds.size&&board.posts.every(old=>data.posts.some(p=>p.id===old.id))&&[...activeEmbeds].every(([key,url])=>{const [postId,index]=key.split(':');return data.posts.find(p=>p.id===postId)?.links?.[Number(index)]?.url===url;})){
       if(data.version!==board.version){const notice=$('#media-update');if(notice)notice.hidden=false;}return;
     }
@@ -47,13 +48,14 @@ async function loadBoard(id,preservePlayers=false){
 }
 function connect(id){events?.close();events=new EventSource(`/api/boards/${encodeURIComponent(id)}/events`);events.addEventListener('refresh',()=>{
   // Do not replace an active comment input; refresh after it loses focus.
-  if(document.activeElement?.closest('.comment-form')){pendingRefresh=true;return;}
+  if(dragState||document.activeElement?.closest('.comment-form')){pendingRefresh=true;return;}
   loadBoard(id,true).catch(e=>{events.close();toast(e.message);});
-});events.addEventListener('revoked',()=>{accessEpoch++;pendingRefresh=false;activeEmbeds.clear();events.close();dialog.close();board=null;app.innerHTML='<div class="shell"><div class="empty"><h2>此互動牆已停止分享</h2><a href="/">返回首頁</a></div></div>';});events.addEventListener('ready',()=>loadBoard(id,true).catch(e=>toast(e.message)));}
+});events.addEventListener('revoked',()=>{accessEpoch++;pendingRefresh=false;clearDrag();activeEmbeds.clear();events.close();dialog.close();board=null;app.innerHTML='<div class="shell"><div class="empty"><h2>此互動牆已停止分享</h2><a href="/">返回首頁</a></div></div>';});events.addEventListener('ready',()=>loadBoard(id,true).catch(e=>toast(e.message)));}
 function syncText(){const s=board.sync;if(s.demo)return '本機示範：資料已存於本機，未連接 Drive';if(!board.isOwner)return '貼文已送出後，將由教師的 Drive 保存';if(s.error)return s.error;if(s.version>=s.current)return '✓ 已保存至教師 Google Drive';return '已保存至伺服器 · Drive 同步中…';}
 function renderBoard(){
   const q=search,focused=document.activeElement?.id==='post-search',selection=focused?document.activeElement.selectionStart:0;
-  app.innerHTML=`<div class="shell"><a class="eyebrow" href="/">← 返回我的互動牆</a><div class="hero"><div><div class="toolbar-group"><span class="badge green">${esc(board.domain)}</span><span class="badge">${lifecycleLabels[board.lifecycle]}</span>${board.frozen?'<span class="badge amber">已凍結</span>':''}${board.deadlineAt?`<span class="badge amber">臺灣時間 ${esc(taipeiInput(board.deadlineAt).replace('T',' '))} 截止</span>`:''}${board.maxPostsPerStudent?`<span class="badge">每人 ${board.maxPostsPerStudent} 篇</span>`:''}${board.moderation?'<span class="badge">教師審核</span>':''}</div><h1>${esc(board.title)}</h1><p class="muted">${esc(board.description)}</p><div class="sync">${esc(syncText())}${board.isOwner&&!session.demo?'<button class="quiet small" data-action="sync">重新同步</button>':''}</div></div><div class="toolbar-group"><button data-action="share">分享 / QR Code</button>${board.isOwner?'<button data-action="settings">設定</button><button data-action="manage">管理</button>':''}</div></div><div class="toolbar"><div class="toolbar-group"><input id="post-search" class="search" type="search" value="${esc(q)}" placeholder="搜尋貼文、作者…" aria-label="搜尋貼文"><select id="layout" aria-label="顯示版型">${Object.entries(labels).map(([k,v])=>`<option value="${k}" ${view===k?'selected':''}>${v}</option>`).join('')}</select><span class="muted small">${board.posts.length} 則分享</span></div><div class="toolbar-group">${board.isOwner?'<button class="quiet" data-action="export">JSON 備份</button><button class="quiet" data-action="csv">CSV 成果</button>':''}${canWrite()?'<button class="primary" data-action="post">＋ 新增貼文</button>':'<span class="badge">目前僅供瀏覽</span>'}</div></div><div id="media-update" class="notice" hidden>牆上有新內容。<button class="small" data-action="media-refresh">停止影音並更新</button></div><div id="posts"></div></div>`;
+  app.innerHTML=`<div class="shell"><a class="eyebrow" href="/">← 返回我的互動牆</a><div class="hero"><div><div class="toolbar-group"><span class="badge green">${esc(board.domain)}</span><span class="badge">${lifecycleLabels[board.lifecycle]}</span>${board.frozen?'<span class="badge amber">已凍結</span>':''}${board.deadlineAt?`<span class="badge amber">臺灣時間 ${esc(taipeiInput(board.deadlineAt).replace('T',' '))} 截止</span>`:''}${board.maxPostsPerStudent?`<span class="badge">每人 ${board.maxPostsPerStudent} 篇</span>`:''}${board.votingEnabled?'<span class="badge green">投票中 · 每人一票</span>':''}${board.moderation?'<span class="badge">教師審核</span>':''}</div><h1>${esc(board.title)}</h1><p class="muted">${esc(board.description)}</p><div class="sync">${esc(syncText())}${board.isOwner&&!session.demo?'<button class="quiet small" data-action="sync">重新同步</button>':''}</div></div><div class="toolbar-group"><button data-action="share">分享 / QR Code</button>${board.isOwner?'<button data-action="settings">設定</button><button data-action="background">底圖</button><button data-action="manage">管理</button>':''}</div></div><div class="toolbar"><div class="toolbar-group"><input id="post-search" class="search" type="search" value="${esc(q)}" placeholder="搜尋貼文、作者…" aria-label="搜尋貼文"><select id="layout" aria-label="顯示版型">${Object.entries(labels).map(([k,v])=>`<option value="${k}" ${view===k?'selected':''}>${v}</option>`).join('')}</select><span class="muted small">${board.posts.length} 則分享</span></div><div class="toolbar-group">${board.isOwner?'<button class="quiet" data-action="export">JSON 備份</button><button class="quiet" data-action="csv">CSV 成果</button>':''}${canWrite()?'<button class="primary" data-action="post">＋ 新增貼文</button>':'<span class="badge">目前僅供瀏覽</span>'}</div></div><div id="media-update" class="notice" hidden>牆上有新內容。<button class="small" data-action="media-refresh">停止影音並更新</button></div><div id="wall-surface" class="wall-surface"><div id="posts"></div></div></div>`;
+  const surface=$('#wall-surface');if(board.background){surface.classList.add('has-background');surface.style.backgroundImage=`url("/api/boards/${encodeURIComponent(board.id)}/background/${encodeURIComponent(board.background.id)}")`;surface.style.backgroundSize=board.background.mode==='width'?'100% auto':'auto';surface.style.backgroundRepeat=board.background.mode==='width'?'repeat-y':'repeat';}
   renderPosts();if(focused){$('#post-search').focus();$('#post-search').setSelectionRange(selection,selection);}
 }
 function renderPosts(){activeEmbeds.clear();const notice=$('#media-update');if(notice)notice.hidden=true;const target=$('#posts');if(!target)return;const posts=board.posts.filter(p=>(p.title+p.body+p.authorName+(p.links||[]).map(l=>l.url).join(' ')).toLowerCase().includes(search.toLowerCase()));
@@ -85,15 +87,15 @@ function playMedia(post,index){
   slot.replaceChildren(player,stop);activeEmbeds.set(key,link.url);
 }
 function card(p){const mine=p.authorId===session.user.id,edit=(mine||board.isOwner)&&canWrite(),write=canWrite();
-  return `<article class="post ${p.color}" data-post="${p.id}"><div class="post-head"><span>${esc(p.authorName)}</span><span class="muted">${date(p.createdAt)}</span></div><div class="post-content">${p.status!=='published'?`<p><span class="badge amber">${p.status==='uploading'?'附件待完成 · 僅本人與教師可見':'待教師審核'}</span></p>`:''}<h3>${esc(p.title)}</h3><p>${esc(p.body)}</p>${linkCards(p)}${p.attachments.map(a=>{const url=`/api/boards/${board.id}/posts/${p.id}/attachments/${a.id}`;return a.mime.startsWith('image/')?`<a class="attachment" href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${esc(a.name)}" loading="lazy"></a>`:`<a class="attachment file" href="${url}">↧ ${esc(a.name)} · ${Math.ceil(a.size/1024)} KB</a>`;}).join('')}</div><div class="post-foot"><span class="section-tag">${esc(p.section)}</span><div class="post-actions">${p.status==='published'?`<button class="quiet small" data-action="like" data-id="${p.id}" aria-label="喜歡" aria-pressed="${p.liked}" ${write?'':'disabled'}>${p.liked?'♥':'♡'} ${p.likeCount}</button><button class="quiet small" data-action="comments" data-id="${p.id}" aria-expanded="${expanded.has(p.id)}">留言 ${p.comments.length}</button>`:''}${board.isOwner&&canWrite()&&p.status==='pending'?`<button class="accent small" data-action="approve" data-id="${p.id}">核准</button>`:''}${edit?`<button class="quiet small" data-action="edit" data-id="${p.id}">編輯</button><button class="quiet small danger" data-action="delete" data-id="${p.id}" aria-label="刪除貼文">×</button>`:''}</div></div>${expanded.has(p.id)?`<div class="comments">${p.comments.map(c=>`<div class="comment"><div class="comment-top"><strong>${esc(c.authorName)}</strong>${write&&(c.authorId===session.user.id||board.isOwner)?`<button class="quiet small danger" data-action="delete-comment" data-id="${p.id}" data-comment="${c.id}">刪除</button>`:''}</div><p>${esc(c.body)}</p></div>`).join('')}${write?`<form class="comment-form" data-form="comment" data-id="${p.id}"><input name="body" required maxlength="2000" placeholder="給同學一點回饋…" aria-label="留言內容"><button type="submit" class="small">送出</button></form>`:''}</div>`:''}</article>`;
+  return `<article class="post ${p.color}" data-post="${p.id}">${board.isOwner&&write?`<div class="reorder-tools"><button type="button" class="drag-handle small" data-drag="${p.id}" aria-label="拖曳排序貼文">⠿ 拖曳排序</button><button class="small" data-action="move-up" data-id="${p.id}" aria-label="貼文上移">↑</button><button class="small" data-action="move-down" data-id="${p.id}" aria-label="貼文下移">↓</button></div>`:''}<div class="post-head"><span>${esc(p.authorName)}</span><span class="muted">${date(p.createdAt)}</span></div><div class="post-content">${p.status!=='published'?`<p><span class="badge amber">${p.status==='uploading'?'附件待完成 · 僅本人與教師可見':'待教師審核'}</span></p>`:''}<h3>${esc(p.title)}</h3><p>${esc(p.body)}</p>${linkCards(p)}${p.attachments.map(a=>{const url=`/api/boards/${board.id}/posts/${p.id}/attachments/${a.id}`;return a.mime.startsWith('image/')?`<a class="attachment" href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${esc(a.name)}" loading="lazy"></a>`:`<a class="attachment file" href="${url}">↧ ${esc(a.name)} · ${Math.ceil(a.size/1024)} KB</a>`;}).join('')}</div><div class="post-foot"><span class="section-tag">${esc(p.section)}</span><div class="post-actions">${p.status==='published'?`<button class="quiet small" data-action="like" data-id="${p.id}" aria-label="喜歡" aria-pressed="${p.liked}" ${write?'':'disabled'}>${p.liked?'♥':'♡'} ${p.likeCount}</button><button class="quiet small" data-action="vote" data-id="${p.id}" aria-pressed="${!!p.voted}" ${write&&board.votingEnabled?'':'disabled'}>${p.voted?'✓ 已投票':'投票'} ${p.voteCount||0}</button><button class="quiet small" data-action="comments" data-id="${p.id}" aria-expanded="${expanded.has(p.id)}">留言 ${p.comments.length}</button>`:''}${board.isOwner&&canWrite()&&p.status==='pending'?`<button class="accent small" data-action="approve" data-id="${p.id}">核准</button>`:''}${edit?`<button class="quiet small" data-action="edit" data-id="${p.id}">編輯</button><button class="quiet small danger" data-action="delete" data-id="${p.id}" aria-label="刪除貼文">×</button>`:''}</div></div>${expanded.has(p.id)?`<div class="comments">${p.comments.map(c=>`<div class="comment"><div class="comment-top"><strong>${esc(c.authorName)}</strong>${write&&(c.authorId===session.user.id||board.isOwner)?`<button class="quiet small danger" data-action="delete-comment" data-id="${p.id}" data-comment="${c.id}">刪除</button>`:''}</div><p>${esc(c.body)}</p></div>`).join('')}${write?`<form class="comment-form" data-form="comment" data-id="${p.id}"><input name="body" required maxlength="2000" placeholder="給同學一點回饋…" aria-label="留言內容"><button type="submit" class="small">送出</button></form>`:''}</div>`:''}</article>`;
 }
 function modal(title,html){dialog.innerHTML=`<div class="dialog-top"><h2>${esc(title)}</h2><button class="quiet" data-action="close" aria-label="關閉">✕</button></div>${html}`;if(!dialog.open)dialog.showModal();}
 const actions=label=>`<div class="form-error" role="alert"></div><div class="dialog-actions"><button type="button" data-action="close">取消</button><button type="submit" class="primary">${label}</button></div>`;
 function createDialog(){if(!session.user.driveConnected)return toast('請先在首頁連接 Google Drive。');modal('建立新的互動牆',`<form data-form="create"><label>互動牆名稱<input name="title" required maxlength="100" placeholder="例如：林家花園建築觀察"></label><label>活動說明<textarea name="description" maxlength="2000" placeholder="給孩子一個觀察方向或討論問題…"></textarea></label><label>版型<select name="layout">${Object.entries(labels).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><p class="muted">正式模式會在您的 Google Drive / Google Padlet 下建立同名資料夾。</p>${actions('建立互動牆')}</form>`);}
 function postDialog(p){const key=`draft:${session.user.id}:${board.id}:${p?.id||'new'}`;let saved;try{saved=JSON.parse(sessionStorage.getItem(key));}catch{}const value=saved||p||{};
-  modal(p?'編輯貼文':'分享你的想法',`<form data-form="post" data-id="${p?.id||''}" data-version="${p?.version||''}" data-draft="${key}"><label>標題<input name="title" value="${esc(value.title||'')}" maxlength="160" placeholder="為你的發現取個名字"></label><label>內容<textarea name="body" maxlength="10000" rows="5" placeholder="我觀察到…">${esc(value.body||'')}</textarea></label><label>網址與影音連結（每行一個，最多 5 個）<textarea name="links" rows="3" maxlength="10244" placeholder="https://www.youtube.com/watch?v=…&#10;https://…">${esc(typeof value.links==='string'?value.links:(value.links||[]).map(l=>l.url).join('\n'))}</textarea><small>支援一般網址、YouTube、HTTPS MP4／WebM 與 MP3／M4A／OGG／WAV 直連。只分享網址時可不填內文；不需要貼 iframe 程式碼。</small></label><div class="form-grid"><label>分區<select name="section">${board.sections.map(s=>`<option ${value.section===s?'selected':''}>${esc(s)}</option>`).join('')}</select></label><label>卡片色彩<select name="color">${[['cream','暖黃'],['blue','天空藍'],['pink','柔粉'],['green','草綠']].map(([k,v])=>`<option value="${k}" ${value.color===k?'selected':''}>${v}</option>`).join('')}</select></label></div><label>加入附件<input type="file" name="file" accept="image/png,image/jpeg,image/webp,application/pdf"><small>PNG、JPEG、WebP 或 PDF，單檔 10 MB；每篇最多 5 個。可再次編輯補傳。附件失敗會保留草稿。</small></label>${saved?'<p class="muted">已恢復此瀏覽器的文字草稿。</p>':''}${actions(p?'儲存變更':'發布貼文')}</form>`);
+  modal(p?'編輯貼文':'分享你的想法',`<form data-form="post" data-id="${p?.id||''}" data-version="${p?.version||''}" data-draft="${key}"><label>標題<input name="title" value="${esc(value.title||'')}" maxlength="160" placeholder="為你的發現取個名字"></label><label>內容<textarea name="body" maxlength="10000" rows="5" placeholder="我觀察到…">${esc(value.body||'')}</textarea></label><label>網址與影音連結（每行一個，最多 20 個）<textarea name="links" rows="3" maxlength="40979" placeholder="https://www.youtube.com/watch?v=…&#10;https://…">${esc(typeof value.links==='string'?value.links:(value.links||[]).map(l=>l.url).join('\n'))}</textarea><small>支援一般網址、YouTube、HTTPS MP4／WebM 與 MP3／M4A／OGG／WAV 直連。只分享網址時可不填內文；不需要貼 iframe 程式碼。</small></label><div class="form-grid"><label>分區<select name="section">${board.sections.map(s=>`<option ${value.section===s?'selected':''}>${esc(s)}</option>`).join('')}</select></label><label>卡片色彩<select name="color">${[['cream','暖黃'],['blue','天空藍'],['pink','柔粉'],['green','草綠']].map(([k,v])=>`<option value="${k}" ${value.color===k?'selected':''}>${v}</option>`).join('')}</select></label></div><label>加入附件<input type="file" name="file" accept="image/png,image/jpeg,image/webp,application/pdf"><small>PNG、JPEG、WebP 或 PDF，單檔 10 MB；每篇最多 5 個。可再次編輯補傳。附件失敗會保留草稿。</small></label>${saved?'<p class="muted">已恢復此瀏覽器的文字草稿。</p>':''}${actions(p?'儲存變更':'發布貼文')}</form>`);
 }
-function settingsDialog(){modal('互動牆設定',`<form data-form="settings" data-version="${board.version}"><label>名稱<input name="title" value="${esc(board.title)}" required maxlength="100"></label><label>活動說明<textarea name="description" maxlength="2000">${esc(board.description)}</textarea></label><label>預設版型<select name="layout">${Object.entries(labels).map(([k,v])=>`<option value="${k}" ${board.layout===k?'selected':''}>${v}</option>`).join('')}</select></label><label>允許的學校網域<input name="domain" value="${esc(board.domain)}" required></label><label>限定學生名單（選填，每行一個電子郵件）<textarea name="allowedEmails" placeholder="空白表示該網域持有連結者皆可進入">${esc(board.allowedEmails.join('\n'))}</textarea></label><label>分區（每行一個）<textarea name="sections" required>${esc(board.sections.join('\n'))}</textarea><small>移除分區時，原有貼文會移到第一個分區。</small></label><label>截止時間（臺灣時間，可留白）<input type="datetime-local" name="deadlineAt" value="${taipeiInput(board.deadlineAt)}"><small>截止後學生只能瀏覽；教師可繼續管理。即使電腦在其他時區，這裡仍採臺灣時間。</small></label><label>每名學生發文上限<input type="number" name="maxPostsPerStudent" min="0" max="100" step="1" required value="${board.maxPostsPerStudent}"><small>0 表示不限。待審與待上傳也計入；回收站貼文不計入。</small></label><label class="check"><input type="checkbox" name="moderation" ${board.moderation?'checked':''}>學生新貼文與修改須經審核</label><label class="check"><input type="checkbox" name="frozen" ${board.frozen?'checked':''}>凍結：學生只能瀏覽</label>${!session.demo?'<p><a href="/auth/drive">重新連接 Google Drive →</a></p>':''}${actions('儲存設定')}</form>`);}
+function settingsDialog(){modal('互動牆設定',`<form data-form="settings" data-version="${board.version}"><label>名稱<input name="title" value="${esc(board.title)}" required maxlength="100"></label><label>活動說明<textarea name="description" maxlength="2000">${esc(board.description)}</textarea></label><label>預設版型<select name="layout">${Object.entries(labels).map(([k,v])=>`<option value="${k}" ${board.layout===k?'selected':''}>${v}</option>`).join('')}</select></label><label>允許的學校網域<input name="domain" value="${esc(board.domain)}" required></label><label>限定學生名單（選填，每行一個電子郵件）<textarea name="allowedEmails" placeholder="空白表示該網域持有連結者皆可進入">${esc(board.allowedEmails.join('\n'))}</textarea></label><label>分區（每行一個）<textarea name="sections" required>${esc(board.sections.join('\n'))}</textarea><small>移除分區時，原有貼文會移到第一個分區。</small></label><label>截止時間（臺灣時間，可留白）<input type="datetime-local" name="deadlineAt" value="${taipeiInput(board.deadlineAt)}"><small>截止後學生只能瀏覽；教師可繼續管理。即使電腦在其他時區，這裡仍採臺灣時間。</small></label><label>每名學生發文上限<input type="number" name="maxPostsPerStudent" min="0" max="100" step="1" required value="${board.maxPostsPerStudent}"><small>0 表示不限。待審與待上傳也計入；回收站貼文不計入。</small></label><label class="check"><input type="checkbox" name="moderation" ${board.moderation?'checked':''}>學生新貼文與修改須經審核</label><label class="check"><input type="checkbox" name="votingEnabled" ${board.votingEnabled?'checked':''}>開啟貼文投票（每人一票，可改投或取消）</label><label class="check"><input type="checkbox" name="frozen" ${board.frozen?'checked':''}>凍結：學生只能瀏覽</label>${!session.demo?'<p><a href="/auth/drive">重新連接 Google Drive →</a></p>':''}${actions('儲存設定')}</form>`);}
 function manageDialog(){
   modal('互動牆管理',`<p>目前狀態：<strong>${lifecycleLabels[board.lifecycle]}</strong></p><div class="toolbar-group">
     <button data-action="template">複製教學模板</button><button data-action="trash-posts">貼文回收站</button>
@@ -107,6 +109,8 @@ async function trashDialog(){
   modal('貼文回收站',`<p class="muted">僅教師可還原。審核模式下還原的學生作品會重新等待審核。</p>${board.lifecycle!=='active'?'<div class="notice">請先還原互動牆，才能還原貼文。</div>':''}${items.map(p=>`<div class="comment"><h3>${esc(p.title||'無標題')}</h3><p>${esc(p.authorName)} · ${p.deletedAt?date(p.deletedAt):'較早版本刪除'}</p><button data-action="restore-post" data-id="${p.id}" ${board.lifecycle!=='active'?'disabled':''}>還原貼文</button></div>`).join('')||'<p>回收站目前沒有貼文。</p>'}`);
 }
 async function dispatch(button){const action=button.dataset.action,id=button.dataset.id,p=board?.posts.find(p=>p.id===id),base=board?`/api/boards/${board.id}`:'';
+  if(action==='background')return backgroundDialog();
+  if(action==='move-up'||action==='move-down'){const posts=visiblePosts(),index=posts.findIndex(x=>x.id===id),target=posts[index+(action==='move-up'?-1:1)];if(target)await movePost(id,target.id,action==='move-up'?'before':'after');return;}
   if(action==='play-media')return playMedia(p,Number(button.dataset.index));
   if(action==='media-refresh'){await loadBoard(board.id);return;}
   if(action==='manage')return manageDialog();
@@ -130,6 +134,7 @@ async function dispatch(button){const action=button.dataset.action,id=button.dat
   if(action==='delete'){if(!confirm('確定將這則貼文移至回收站？教師可從「管理 → 貼文回收站」還原。'))return;await api(base+'/posts/'+id,{method:'DELETE'});}
   if(action==='delete-comment'){if(!confirm('確定刪除留言？'))return;await api(base+'/posts/'+id+'/comments/'+button.dataset.comment,{method:'DELETE'});}
   if(action==='approve')await api(base+'/posts/'+id+'/approve',{method:'POST',body:{}});
+  if(action==='vote')await api(base+'/posts/'+id+'/vote',{method:'PUT',body:{voted:!p.voted}});
   if(action==='like')await api(base+'/posts/'+id+'/like',{method:'PUT',body:{liked:!p.liked}});
   if(action==='sync'){toast('正在同步至 Google Drive…');await api(base+'/sync',{method:'POST',body:{}});}
   await loadBoard(board.id);
@@ -151,9 +156,18 @@ document.addEventListener('submit',async event=>{
   try{
     if(form.dataset.form==='template'){const result=await api(base+'/template',{method:'POST',key:form.dataset.operation,body:{title:f.get('title')}});location.assign('/?board='+result.id);return;}
     if(form.dataset.form==='create'){const result=await api('/api/boards',{method:'POST',key:form.dataset.operation,body:Object.fromEntries(f)});location.assign('/?board='+result.id);return;}
+    if(form.dataset.form==='background'){
+      const file=f.get('file'),mode=f.get('mode'),version=Number(form.dataset.version);
+      if(f.has('remove'))await api(base+'/background',{method:'PATCH',key:form.dataset.operation,body:{version,mode:null}});
+      else if(file.size){
+        if(file.size>10*1024*1024)throw new Error('底圖超過 10 MB。');
+        const data=new FormData();data.set('file',file);submit.textContent='正在上傳底圖…';
+        await api(base+'/background',{method:'POST',key:form.dataset.operation,body:data,headers:{'X-Board-Version':String(version),'X-Background-Mode':mode}});
+      }else await api(base+'/background',{method:'PATCH',key:form.dataset.operation,body:{version,mode}});
+    }
     if(form.dataset.form==='settings'){
       await api(base,{method:'PATCH',key:form.dataset.operation,body:{title:f.get('title'),description:f.get('description'),layout:f.get('layout'),domain:f.get('domain'),version:Number(form.dataset.version),
-        allowedEmails:f.get('allowedEmails').split(/\s+/).filter(Boolean),sections:f.get('sections').split('\n').map(x=>x.trim()).filter(Boolean),moderation:f.has('moderation'),frozen:f.has('frozen'),deadlineAt:f.get('deadlineAt')?new Date(f.get('deadlineAt')+':00+08:00').toISOString():null,maxPostsPerStudent:Number(f.get('maxPostsPerStudent'))}});view=f.get('layout');
+        allowedEmails:f.get('allowedEmails').split(/\s+/).filter(Boolean),sections:f.get('sections').split('\n').map(x=>x.trim()).filter(Boolean),moderation:f.has('moderation'),votingEnabled:f.has('votingEnabled'),frozen:f.has('frozen'),deadlineAt:f.get('deadlineAt')?new Date(f.get('deadlineAt')+':00+08:00').toISOString():null,maxPostsPerStudent:Number(f.get('maxPostsPerStudent'))}});view=f.get('layout');
     }
     if(form.dataset.form==='post'){
       const file=f.get('file');if(file.size>10*1024*1024)throw new Error('附件超過 10 MB。');
@@ -171,8 +185,47 @@ document.addEventListener('submit',async event=>{
       try{const current=await api(base),p=current.posts.find(p=>p.id===form.dataset.savedId);if(p){form.dataset.id=p.id;form.dataset.version=p.version;delete form.dataset.savedId;delete form.dataset.operation;}}catch{}
     }
     if(error)error.textContent=e.message;else toast(e.message);
-  }finally{submit.disabled=false;if(form.dataset.form==='post')submit.textContent='儲存貼文 / 重試附件';}
+  }finally{submit.disabled=false;if(form.dataset.form==='post')submit.textContent='儲存貼文 / 重試附件';if(form.dataset.form==='background')submit.textContent='儲存底圖';}
 });
 // If a failed request is edited, do not replay the stale operation payload.
 document.addEventListener('input',event=>{const form=event.target.closest('[data-form]');if(form&&!form.dataset.savedId)delete form.dataset.operation;});
+
+function backgroundDialog(){
+  modal('更換互動牆底圖',`<form data-form="background" data-version="${board.version}"><label>上傳底圖<input name="file" type="file" accept="image/png,image/jpeg,image/webp"><small>PNG、JPEG、WebP，最多 10 MB。${board.background?'目前：'+esc(board.background.name):'尚未設定底圖。'}</small></label><label>延伸方式<select name="mode"><option value="tile" ${board.background?.mode==='tile'?'selected':''}>重複鋪排（適合紋理）</option><option value="width" ${board.background?.mode==='width'?'selected':''}>符合牆寬，向下重複延伸</option></select></label><p class="muted">底圖跟隨貼文區高度延伸，不會把整張圖拉長變形。可不選新圖片，直接變更鋪排方式。</p>${board.background?'<label class="check"><input type="checkbox" name="remove">移除目前底圖</label>':''}${actions('儲存底圖')}</form>`);
+}
+function visiblePosts(){
+  const posts=board.posts.filter(p=>(p.title+p.body+p.authorName+(p.links||[]).map(l=>l.url).join(' ')).toLowerCase().includes(search.toLowerCase()));
+  return view==='columns'?board.sections.flatMap(s=>posts.filter(p=>p.section===s)):posts;
+}
+async function movePost(postId,targetId,position){
+  try{await api(`/api/boards/${board.id}/reorder`,{method:'POST',body:{postId,targetId,position,version:board.version,moveSection:view==='columns'}});await loadBoard(board.id);toast('已儲存貼文順序');}
+  catch(e){toast(e.message);await loadBoard(board.id);}
+}
+function clearDrag(){
+  document.querySelectorAll('.dragging,.drop-before,.drop-after').forEach(el=>el.classList.remove('dragging','drop-before','drop-after'));
+  dragState=null;
+}
+document.addEventListener('pointerdown',event=>{
+  const handle=event.target.closest('[data-drag]');if(!handle||!board?.isOwner||!canWrite()||event.button!==0)return;
+  event.preventDefault();handle.setPointerCapture(event.pointerId);
+  dragState={postId:handle.dataset.drag,pointerId:event.pointerId};handle.closest('[data-post]').classList.add('dragging');
+});
+document.addEventListener('pointermove',event=>{
+  if(!dragState||event.pointerId!==dragState.pointerId)return;
+  event.preventDefault();
+  document.querySelectorAll('.drop-before,.drop-after').forEach(el=>el.classList.remove('drop-before','drop-after'));
+  const target=document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-post]');
+  dragState.targetId=null;
+  if(target&&target.dataset.post!==dragState.postId){
+    const rect=target.getBoundingClientRect();dragState.targetId=target.dataset.post;dragState.position=event.clientY<rect.top+rect.height/2?'before':'after';target.classList.add('drop-'+dragState.position);
+  }
+  if(event.clientY<90)window.scrollBy(0,-24);else if(event.clientY>window.innerHeight-90)window.scrollBy(0,24);
+},{passive:false});
+document.addEventListener('pointerup',async event=>{
+  if(!dragState||event.pointerId!==dragState.pointerId)return;
+  const move={...dragState};clearDrag();
+  if(move.targetId)await movePost(move.postId,move.targetId,move.position);
+  else if(pendingRefresh){pendingRefresh=false;loadBoard(board.id,true).catch(e=>toast(e.message));}
+});
+document.addEventListener('pointercancel',()=>{if(dragState){clearDrag();if(board)loadBoard(board.id,true).catch(e=>toast(e.message));}});
 init();

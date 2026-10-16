@@ -22,7 +22,7 @@ test('YouTube watch, short, Shorts, live and embed URLs normalize to a single sa
 
 test('link validation blocks scripts, HTML, credentials and spoofed embed providers',()=>{
   for(const url of ['javascript:alert(1)','data:text/html,test','file:///etc/passwd','//youtube.com','<iframe src="https://youtube.com"></iframe>','https://u:p@example.com','https://example.com/\nscript'])assert.throws(()=>normalizeLinks([url]));
-  assert.throws(()=>normalizeLinks(Array(6).fill('https://example.com')));
+  assert.throws(()=>normalizeLinks(Array(21).fill('https://example.com')));
   assert.throws(()=>normalizeLinks([{url:'https://example.com',kind:'youtube'}]));
   for(const url of [`https://youtube.com.evil.example/watch?v=${vid}`,`https://youtube.com:444/watch?v=${vid}`,`https://youtu.be/invalid`])assert.equal(normalizeLinks([url])[0].kind,'link');
 });

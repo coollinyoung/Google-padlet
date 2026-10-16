@@ -23,7 +23,7 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
     if(req.user&&!config.demo)req.user.teacher=config.teachers.includes(req.user.email);
     next();
   });
-  app.use(express.json({limit:'128kb'}));
+  app.use(express.json({limit:'256kb'}));
   app.use((req,res,next)=>{
     if(req.method==='GET')return next();
     const key=req.user?.id||req.socket.remoteAddress,now=Date.now();
@@ -36,9 +36,9 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
   registerAuth(app,store,config);
   app.get('/api/session',(req,res)=>{
     const u=req.user;
-    res.json({version:'0.3.0',demo:config.demo,user:u?{id:u.id,name:u.name,email:u.email,teacher:u.teacher,driveConnected:config.demo||!!u.credentials}:null});
+    res.json({version:'0.4.0',demo:config.demo,user:u?{id:u.id,name:u.name,email:u.email,teacher:u.teacher,driveConnected:config.demo||!!u.credentials}:null});
   });
-  app.get('/healthz',(req,res)=>res.json({ok:true,version:'0.3.0'}));
+  app.get('/healthz',(req,res)=>res.json({ok:true,version:'0.4.0'}));
   app.use('/api',(req,res,next)=>{if(!req.user)return res.status(401).json({error:'請先登入。'});next();});
   const publish=id=>{
     for(const s of streams)if(s.boardId===id){
@@ -72,6 +72,7 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
     req.on('close',()=>{clearInterval(heartbeat);streams.delete(s);});
   });
   app.patch('/api/boards/:id',(req,res)=>res.json(mutate(req,'settings',(b,u)=>domain.settings(b,u,req.body))));
+  app.post('/api/boards/:id/reorder',(req,res)=>res.json(mutate(req,'post.reorder',(b,u)=>domain.reorderPost(b,u,req.body))));
   app.patch('/api/boards/:id/lifecycle',(req,res)=>res.json(mutate(req,'board.lifecycle',(b,u)=>domain.lifecycle(b,u,req.body))));
   app.post('/api/boards/:id/template',(req,res)=>{
     const source=get(req);domain.owner(source,req.user);
@@ -94,6 +95,7 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
   app.post('/api/boards/:id/posts/:postId/approve',(req,res)=>res.json(mutate(req,'post.approve',(b,u)=>domain.approvePost(b,u,req.params.postId))));
   app.post('/api/boards/:id/posts/:postId/comments',(req,res)=>res.status(201).json(mutate(req,'comment.create',(b,u)=>domain.addComment(b,u,req.params.postId,req.body))));
   app.delete('/api/boards/:id/posts/:postId/comments/:commentId',(req,res)=>res.json(mutate(req,'comment.delete',(b,u)=>domain.removeComment(b,u,req.params.postId,req.params.commentId))));
+  app.put('/api/boards/:id/posts/:postId/vote',(req,res)=>res.json(mutate(req,'vote.set',(b,u)=>domain.setVote(b,u,req.params.postId,req.body))));
   app.put('/api/boards/:id/posts/:postId/like',(req,res)=>res.json(mutate(req,'reaction.set',(b,u)=>domain.setLike(b,u,req.params.postId,req.body))));
   app.get('/api/boards/:id/qr',async(req,res)=>{
     get(req);res.type('png').send(await QRCode.toBuffer(config.baseUrl+'/?board='+req.params.id,{width:320,margin:2}));
@@ -108,6 +110,44 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
     catch(e){store.syncError(b.id,'Drive 同步失敗，請檢查授權、空間與資料夾是否存在。');publish(b.id);throw e;}
   });
   const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:10*1024*1024,files:1,fields:0}});
+  app.post('/api/boards/:id/background',(req,res,next)=>{
+    const b=get(req);domain.owner(b,req.user);domain.writable(b,req.user);next();
+  },upload.single('file'),async(req,res)=>{
+    const b=get(req),f=req.file,version=Number(req.get('X-Board-Version'));
+    const mode=req.get('X-Background-Mode');
+    if(!['tile','width'].includes(mode))fail(400,'請選擇底圖鋪排方式。');
+    const op=req.get('Idempotency-Key');if(!/^[\w-]{8,100}$/.test(op||''))fail(400,'缺少有效操作識別碼。');
+    const replay=store.db.prepare('SELECT result FROM operations WHERE board_id=? AND user_id=? AND id=?').get(b.id,req.user.id,op);
+    if(replay)return res.json(JSON.parse(replay.result));
+    if(version!==b.version)fail(409,'互動牆已更新，請重新開啟底圖設定。');
+    const mime=f&&detectMime(f.buffer);if(!mime?.startsWith('image/'))fail(400,'底圖支援 PNG、JPEG、WebP，最多 10 MB。');
+    const id=createHash('sha256').update('background:'+b.id+':'+req.user.id+':'+op).digest('hex');
+    f.mimetype=mime;f.originalname=Buffer.from(f.originalname,'latin1').toString('utf8').replace(/[\r\n/\\]/g,'_').slice(0,160)||'background';
+    const background={id,name:f.originalname,mime,mode};
+    if(config.demo){
+      const dir=path.join(config.dataDir,'attachments');mkdirSync(dir,{recursive:true,mode:0o700});
+      background.localPath=path.join(dir,id);writeFileSync(background.localPath,f.buffer,{mode:0o600});
+    }else background.driveId=await drive.upload(b,f,id);
+    res.json(mutate(req,'background.set',(board,u)=>{
+      domain.owner(board,u);domain.writable(board,u);
+      if(board.version!==version)fail(409,'互動牆已更新，請重新開啟底圖設定。');
+      board.background=background;
+    }));
+  });
+  app.patch('/api/boards/:id/background',(req,res)=>res.json(mutate(req,'background.mode',(b,u)=>{
+    domain.owner(b,u);domain.writable(b,u);
+    if(req.body.version!==b.version)fail(409,'互動牆已更新，請重新開啟底圖設定。');
+    if(req.body.mode===null){b.background=null;return;}
+    if(!['tile','width'].includes(req.body.mode)||!b.background)fail(400,'請先上傳底圖並選擇鋪排方式。');
+    b.background.mode=req.body.mode;
+  })));
+  app.get('/api/boards/:id/background/:backgroundId',async(req,res)=>{
+    const b=get(req),a=b.background;
+    if(!a||a.id!==req.params.backgroundId)fail(404,'找不到底圖。');
+    res.type(a.mime);
+    if(config.demo){if(!existsSync(a.localPath))fail(404,'底圖檔案不存在。');return res.sendFile(a.localPath);}
+    const {data}=await drive.download(b.ownerId,a.driveId);data.on('error',()=>res.destroy());data.pipe(res);
+  });
   app.post('/api/boards/:id/posts/:postId/attachments',(req,res,next)=>{
     domain.editable(get(req),req.user,req.params.postId);next();
   },upload.single('file'),async(req,res)=>{

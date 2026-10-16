@@ -113,3 +113,76 @@ test('legacy v0.1 board defaults remain readable and writable without resetting 
   const r=await f.call();assert.equal(r.data.lifecycle,'active');assert.equal(r.data.maxPostsPerStudent,0);assert.equal(r.data.deadlineAt,null);
   assert.equal((await f.call('/posts','POST',{body:'舊牆仍可使用'},'student')).status,201);
 });
+
+test('20 media links persist and 21 are rejected without partial writes',async t=>{
+  const f=await setup(t),links=Array.from({length:20},(_,i)=>`https://example.com/${i}.mp4`);
+  assert.equal((await f.call('/posts','POST',{links},'student')).status,201);
+  assert.equal((await f.call()).data.posts[0].links.length,20);
+  assert.equal((await f.call('/posts','POST',{links:[...links,'https://example.com/21.mp4']},'student')).status,400);
+  assert.equal((await f.call()).data.posts.length,1);
+});
+
+test('teacher ordering persists, supports sections and rejects stale versions and students',async t=>{
+  const f=await setup(t),ids=[];
+  for(const body of ['A','B','C'])ids.push((await f.call('/posts','POST',{body,section:body==='C'?'提問與回饋':'分享區'},'student')).data.id);
+  let b=(await f.call()).data;
+  const body={postId:ids[2],targetId:ids[0],position:'before',version:b.version,moveSection:true};
+  assert.equal((await f.call('/reorder','POST',body,'student')).status,403);
+  const key=randomUUID();assert.equal((await f.call('/reorder','POST',body,'teacher',key)).status,200);
+  assert.equal((await f.call('/reorder','POST',body,'teacher',key)).status,200);
+  b=(await f.call()).data;assert.deepEqual(b.posts.map(p=>p.id),[ids[2],ids[0],ids[1]]);assert.equal(b.posts[0].section,'分享區');
+  assert.equal((await f.call('/reorder','POST',body)).status,409);
+  assert.equal((await f.call('/reorder','POST',{...body,version:b.version,position:'invalid'})).status,400);
+  assert.deepEqual(f.store.board(f.b.id).posts.map(p=>p.id),[ids[2],ids[0],ids[1]]);
+  await f.lifecycle('archived');assert.equal((await f.call('/reorder','POST',{...body,version:(await f.call()).data.version})).status,403);
+});
+
+test('background is private, teacher-only, versioned, repeat-safe and removable',async t=>{
+  const f=await setup(t),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==','base64');
+  async function upload(role='teacher',version=1,mode='tile',data=png,key=randomUUID()){
+    const form=new FormData();form.set('file',new Blob([data],{type:'image/png'}),'底圖.png');
+    const r=await fetch(f.base+'/api/boards/'+f.b.id+'/background',{method:'POST',headers:{Cookie:f.sessions[role],Origin:'http://localhost:3000','Idempotency-Key':key,'X-Board-Version':String(version),'X-Background-Mode':mode},body:form});return {status:r.status,data:await r.json()};
+  }
+  assert.equal((await upload('student')).status,403);
+  assert.equal((await upload('teacher',1,'tile',Buffer.from('<svg/>'))).status,400);
+  const key=randomUUID();assert.equal((await upload('teacher',1,'tile',png,key)).status,200);
+  assert.equal((await upload('teacher',1,'tile',png,key)).status,200);
+  let b=(await f.call()).data;assert.equal(b.background.name,'底圖.png');assert.equal(b.background.localPath,undefined);assert.equal(b.background.driveId,undefined);
+  const url='/background/'+b.background.id;
+  let response=await fetch(f.base+'/api/boards/'+f.b.id+url,{headers:{Cookie:f.sessions.student}});assert.equal(response.status,200);assert.deepEqual(Buffer.from(await response.arrayBuffer()),png);
+  assert.equal((await upload('teacher',1)).status,409);
+  assert.equal((await f.call('/background','PATCH',{version:b.version,mode:'width'})).status,200);
+  assert.equal((await f.call()).data.background.mode,'width');
+  await f.lifecycle('archived');assert.equal((await f.call(url,'GET',undefined,'student')).status,403);
+  await f.lifecycle('active');b=(await f.call()).data;
+  assert.equal((await f.call('/background','PATCH',{version:b.version,mode:null},'student')).status,403);
+  assert.equal((await f.call('/background','PATCH',{version:b.version,mode:null})).status,200);
+  assert.equal((await f.call(url)).status,404);
+});
+
+test('single-choice voting supports switch, cancel, replay, privacy and closure',async t=>{
+  const f=await setup(t),a=(await f.call('/posts','POST',{body:'A'})).data.id,b=(await f.call('/posts','POST',{body:'B'})).data.id;
+  const vote=(id,voted=true,key=randomUUID())=>f.call('/posts/'+id+'/vote','PUT',{voted},'student',key);
+  assert.equal((await vote(a)).status,403);await f.settings({votingEnabled:true});
+  const key=randomUUID();assert.equal((await vote(a,true,key)).status,200);assert.equal((await vote(a,true,key)).status,200);
+  let state=(await f.call('','GET',undefined,'student')).data;
+  assert.equal(state.votes,undefined);assert.equal(state.posts[0].voteCount,1);assert.equal(state.posts[0].voted,true);
+  assert.equal((await vote(b)).status,200);state=(await f.call()).data;assert.deepEqual(state.posts.map(p=>p.voteCount),[0,1]);
+  await vote(a,false);assert.equal((await f.call()).data.posts[1].voteCount,1);
+  await vote(b,false);assert.deepEqual((await f.call()).data.posts.map(p=>p.voteCount),[0,0]);
+  await Promise.all([vote(a),vote(b)]);assert.equal((await f.call()).data.posts.reduce((n,p)=>n+p.voteCount,0),1);
+  await f.settings({votingEnabled:false});assert.equal((await vote(a)).status,403);
+  assert.equal((await f.call()).data.posts.reduce((n,p)=>n+p.voteCount,0),1);
+  assert.match((await f.call('/export.csv')).data,/票數/);
+});
+
+test('voting enforces moderation, deadline and freeze; templates start with no votes',async t=>{
+  const f=await setup(t);await f.settings({votingEnabled:true,moderation:true});
+  const p=(await f.call('/posts','POST',{body:'待審'},'student')).data.id;
+  const vote=()=>f.call('/posts/'+p+'/vote','PUT',{voted:true},'student');
+  assert.equal((await vote()).status,400);await f.call('/posts/'+p+'/approve','POST',{});
+  await f.settings({frozen:true});assert.equal((await vote()).status,403);
+  await f.settings({frozen:false,deadlineAt:'2000-01-01T00:00:00Z'});assert.equal((await vote()).status,403);
+  await f.settings({deadlineAt:null});assert.equal((await vote()).status,200);
+  const copy=await f.call('/template','POST',{title:'沒有票的模板'});assert.equal(f.store.board(copy.data.id).votes,undefined);
+});

@@ -1,6 +1,6 @@
 {
   "name": "google-padlet",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "教師 Google Drive 互動牆",
