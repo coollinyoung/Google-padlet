@@ -5,3 +5,5 @@
 .wall-surface{min-height:65vh;padding:18px;border-radius:16px;background-position:top center}.wall-surface.has-background .column-heading{background:#fffffff0;padding:12px;border-radius:8px}.reorder-tools{display:flex;gap:6px;padding:8px 12px;background:#f7f8f4;border-bottom:1px solid var(--line)}.drag-handle{touch-action:none;cursor:grab;flex:1}.drag-handle:active{cursor:grabbing}.post.dragging{opacity:.55}.post.drop-before{outline:4px solid #427e70;border-top-color:#173e38}.post.drop-after{outline:4px solid #bd8b32;border-bottom:6px solid #bd8b32}@media print{.reorder-tools{display:none!important}}
 
 .post-foot,.post-actions{flex-wrap:wrap}.post-actions{justify-content:flex-end}
+
+.drag-handle{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}.reorder-tools button{min-height:44px;min-width:44px}@media(pointer:coarse){.post-actions button,.toolbar button{min-height:44px}.post-actions{gap:6px}}

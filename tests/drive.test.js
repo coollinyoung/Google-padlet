@@ -5,7 +5,7 @@ import path from 'node:path';
 import {tmpdir} from 'node:os';
 import {Store} from '../server/store.js';
 import {newBoard,addPost} from '../server/domain.js';
-import {DriveService} from '../server/drive.js';
+import {DriveService,driveDiagnosticError} from '../server/drive.js';
 import {createApp} from '../server/app.js';
 import {randomUUID} from 'node:crypto';
 
@@ -67,4 +67,36 @@ test('background worker records failures and applies retry backoff',async t=>{
   const built=createApp({demo:false,dataDir:dir,baseUrl:'http://localhost:3000'},{store,drive:{async sync(){calls++;throw new Error('quota');}}});
   t.after(()=>{built.close();rmSync(dir,{recursive:true,force:true});});
   await built.tick();await built.tick();assert.equal(calls,1);assert.equal(store.row(b.id).sync_version,0);assert.match(store.row(b.id).sync_error,/同步失敗/);
+});
+
+test('Drive diagnostics checks authenticated account without creating files, detects quota and missing root',async t=>{
+  const {store,user}=setup(t),drive=new DriveService(store,{});
+  assert.equal((await drive.diagnose(user.id)).code,'NOT_CONNECTED');store.credentials(user.id,'placeholder');
+  let account=user.email,quota={usage:'1',limit:'100'},checks=0;
+  drive.client=()=>({about:{async get({fields}){assert.equal(fields,'user(emailAddress),storageQuota(limit,usage)');return {data:{user:{emailAddress:account},storageQuota:quota}};}},files:{async get(){checks++;throw Object.assign(new Error('private secret'),{code:404});}}});
+  assert.equal((await drive.diagnose(user.id)).code,'CONNECTED');assert.equal(checks,0);
+  account='another@example.edu.tw';assert.equal((await drive.diagnose(user.id)).code,'ACCOUNT_MISMATCH');account=user.email;
+  quota={usage:'100',limit:'100'};assert.equal((await drive.diagnose(user.id)).code,'STORAGE_FULL');quota={usage:'100'};
+  assert.equal((await drive.diagnose(user.id)).ok,true);
+  store.root(user.id,'missing-root');const result=await drive.diagnose(user.id);assert.equal(result.code,'FOLDER_UNAVAILABLE');assert.ok(!JSON.stringify(result).includes('secret'));
+});
+
+test('Drive diagnostics requires teacher session and reports demo honestly',async t=>{
+  const {store,user,dir}=setup(t),system=createApp({demo:true,baseUrl:'http://localhost:3000',dataDir:dir},{store});
+  const student={id:'student',teacher:false};store.putUser(student);
+  const server=system.app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+  t.after(async()=>{system.stop();await new Promise(r=>server.close(r));});
+  const url='http://127.0.0.1:'+server.address().port+'/api/drive/check';
+  async function check(u){const r=await fetch(url,{method:'POST',headers:{Origin:'http://localhost:3000',...(u?{Cookie:'gp_session='+store.newSession(u.id)}:{})}});return {status:r.status,data:await r.json()};}
+  assert.equal((await check()).status,401);assert.equal((await check(student)).status,403);assert.equal((await check(user)).data.code,'DEMO');
+});
+
+test('Drive diagnosis sanitizes authorization, policy and rate errors',()=>{
+  for(const [error,code] of [
+    [{response:{status:400,data:{error:'invalid_grant',error_description:'private'}}},'REAUTHORIZE'],
+    [{response:{status:403,data:{error:{errors:[{reason:'storageQuotaExceeded'}]}}}},'STORAGE_FULL'],
+    [{response:{status:403,data:{error:'private'}}},'ACCESS_DENIED'],
+    [{response:{status:429,data:{error:'private'}}},'RATE_LIMIT'],
+    [new Error('private'),'CONNECTION_FAILED']
+  ]){const result=driveDiagnosticError(error);assert.equal(result.code,code);assert.equal(result.ok,false);assert.ok(!JSON.stringify(result).includes('private'));}
 });

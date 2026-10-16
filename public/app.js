@@ -19,7 +19,7 @@ async function api(url,{method='GET',body,key=crypto.randomUUID(),headers={}}={}
 }
 function header(){
   const u=session.user;
-  $('#header').innerHTML=`<a class="brand" href="/"><span class="logo" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Google Padlet</a><div class="account">${session.demo?'<span class="badge amber">本機示範</span>':''}${u?`<span class="avatar">${esc(u.name.slice(0,1))}</span><span class="name">${esc(u.name)}</span><button class="quiet small" data-action="logout">登出</button>`:'<span class="muted">每個想法，都值得被看見</span>'}</div>`;
+  $('#header').innerHTML=`<a class="brand" href="/"><span class="logo" aria-hidden="true"><i></i><i></i><i></i><i></i></span>Google Padlet</a><div class="account">${session.demo?'<span class="badge amber">本機示範</span>':''}${u?`${u.teacher?'<button class="small" data-action="drive-check">Drive 連線檢查</button>':''}<span class="avatar">${esc(u.name.slice(0,1))}</span><span class="name">${esc(u.name)}</span><button class="quiet small" data-action="logout">登出</button>`:'<span class="muted">每個想法，都值得被看見</span>'}</div>`;
 }
 function login(){
   const returnTo=location.pathname+location.search;
@@ -109,6 +109,10 @@ async function trashDialog(){
   modal('貼文回收站',`<p class="muted">僅教師可還原。審核模式下還原的學生作品會重新等待審核。</p>${board.lifecycle!=='active'?'<div class="notice">請先還原互動牆，才能還原貼文。</div>':''}${items.map(p=>`<div class="comment"><h3>${esc(p.title||'無標題')}</h3><p>${esc(p.authorName)} · ${p.deletedAt?date(p.deletedAt):'較早版本刪除'}</p><button data-action="restore-post" data-id="${p.id}" ${board.lifecycle!=='active'?'disabled':''}>還原貼文</button></div>`).join('')||'<p>回收站目前沒有貼文。</p>'}`);
 }
 async function dispatch(button){const action=button.dataset.action,id=button.dataset.id,p=board?.posts.find(p=>p.id===id),base=board?`/api/boards/${board.id}`:'';
+  if(action==='drive-check'){
+    const result=await api('/api/drive/check',{method:'POST',body:{}});
+    modal('Google Drive 連線檢查',`<div class="notice" role="status">${esc(result.message)}</div><p>檢查代碼：${esc(result.code)}</p>${!session.demo?'<p><a class="primary login-link" href="/auth/drive">連接／重新連接 Google Drive</a></p>':''}<p class="muted">此檢查不會建立或刪除檔案。連線成功後，請建立測試牆並確認「已保存至教師 Google Drive」。</p>`);return;
+  }
   if(action==='background')return backgroundDialog();
   if(action==='move-up'||action==='move-down'){const posts=visiblePosts(),index=posts.findIndex(x=>x.id===id),target=posts[index+(action==='move-up'?-1:1)];if(target)await movePost(id,target.id,action==='move-up'?'before':'after');return;}
   if(action==='play-media')return playMedia(p,Number(button.dataset.index));
@@ -201,31 +205,53 @@ async function movePost(postId,targetId,position){
   try{await api(`/api/boards/${board.id}/reorder`,{method:'POST',body:{postId,targetId,position,version:board.version,moveSection:view==='columns'}});await loadBoard(board.id);toast('已儲存貼文順序');}
   catch(e){toast(e.message);await loadBoard(board.id);}
 }
+function updateDropTarget(){
+  if(!dragState)return;
+  document.querySelectorAll('.drop-before,.drop-after').forEach(el=>el.classList.remove('drop-before','drop-after'));
+  const target=document.elementFromPoint(dragState.x,dragState.y)?.closest('[data-post]');
+  dragState.targetId=null;
+  if(target&&target.dataset.post!==dragState.postId){
+    const rect=target.getBoundingClientRect();dragState.targetId=target.dataset.post;dragState.position=dragState.y<rect.top+rect.height/2?'before':'after';target.classList.add('drop-'+dragState.position);
+  }
+}
+function dragScroll(){
+  if(!dragState)return;
+  const {x,y}=dragState;
+  const dy=y<90?-10:y>window.innerHeight-90?10:0;
+  if(dy)window.scrollBy(0,dy);
+  const columns=$('#posts');
+  if(view==='columns'&&columns){const rect=columns.getBoundingClientRect();const dx=x<rect.left+55?-10:x>rect.right-55?10:0;if(dx)columns.scrollBy(dx,0);}
+  updateDropTarget();dragState.frame=requestAnimationFrame(dragScroll);
+}
 function clearDrag(){
+  const previous=dragState;dragState=null;
+  if(previous?.frame)cancelAnimationFrame(previous.frame);
+  if(previous?.handle?.hasPointerCapture?.(previous.pointerId))previous.handle.releasePointerCapture(previous.pointerId);
   document.querySelectorAll('.dragging,.drop-before,.drop-after').forEach(el=>el.classList.remove('dragging','drop-before','drop-after'));
-  dragState=null;
+}
+function cancelDrag(){
+  if(!dragState)return;clearDrag();
+  if(board&&pendingRefresh){pendingRefresh=false;loadBoard(board.id,true).catch(e=>toast(e.message));}
 }
 document.addEventListener('pointerdown',event=>{
-  const handle=event.target.closest('[data-drag]');if(!handle||!board?.isOwner||!canWrite()||event.button!==0)return;
+  const handle=event.target.closest('[data-drag]');if(!handle||dragState||event.isPrimary===false||!board?.isOwner||!canWrite()||event.button!==0)return;
   event.preventDefault();handle.setPointerCapture(event.pointerId);
-  dragState={postId:handle.dataset.drag,pointerId:event.pointerId};handle.closest('[data-post]').classList.add('dragging');
+  dragState={postId:handle.dataset.drag,pointerId:event.pointerId,handle,x:event.clientX,y:event.clientY};handle.closest('[data-post]').classList.add('dragging');
+  dragState.frame=requestAnimationFrame(dragScroll);
 });
 document.addEventListener('pointermove',event=>{
   if(!dragState||event.pointerId!==dragState.pointerId)return;
-  event.preventDefault();
-  document.querySelectorAll('.drop-before,.drop-after').forEach(el=>el.classList.remove('drop-before','drop-after'));
-  const target=document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-post]');
-  dragState.targetId=null;
-  if(target&&target.dataset.post!==dragState.postId){
-    const rect=target.getBoundingClientRect();dragState.targetId=target.dataset.post;dragState.position=event.clientY<rect.top+rect.height/2?'before':'after';target.classList.add('drop-'+dragState.position);
-  }
-  if(event.clientY<90)window.scrollBy(0,-24);else if(event.clientY>window.innerHeight-90)window.scrollBy(0,24);
+  event.preventDefault();dragState.x=event.clientX;dragState.y=event.clientY;updateDropTarget();
 },{passive:false});
 document.addEventListener('pointerup',async event=>{
   if(!dragState||event.pointerId!==dragState.pointerId)return;
+  if(Number.isFinite(event.clientX)&&Number.isFinite(event.clientY)){dragState.x=event.clientX;dragState.y=event.clientY;updateDropTarget();}
   const move={...dragState};clearDrag();
   if(move.targetId)await movePost(move.postId,move.targetId,move.position);
   else if(pendingRefresh){pendingRefresh=false;loadBoard(board.id,true).catch(e=>toast(e.message));}
 });
-document.addEventListener('pointercancel',()=>{if(dragState){clearDrag();if(board)loadBoard(board.id,true).catch(e=>toast(e.message));}});
+document.addEventListener('pointercancel',event=>{if(dragState?.pointerId===event.pointerId)cancelDrag();});
+document.addEventListener('lostpointercapture',event=>{if(dragState?.pointerId===event.pointerId)cancelDrag();});
+document.addEventListener('keydown',event=>{if(event.key==='Escape')cancelDrag();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)cancelDrag();});
 init();

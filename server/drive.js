@@ -14,6 +14,20 @@ export class DriveService {
     auth.on('tokens',tokens=>{const current=this.store.user(ownerId);if(current?.credentials)this.store.credentials(ownerId,encrypt({...decrypt(current.credentials,this.config.key),...tokens},this.config.key));});
     return google.drive({version:'v3',auth});
   }
+  async diagnose(ownerId) {
+    if(this.config.demo)return {ok:false,code:'DEMO',message:'示範模式未連接 Google Drive，請依正式連線教學設定後使用 npm start。'};
+    const user=this.store.user(ownerId);
+    if(!user?.credentials)return {ok:false,code:'NOT_CONNECTED',message:'尚未授權，請按「連接 Google Drive」。'};
+    try {
+      const drive=this.client(ownerId);
+      const {data}=await drive.about.get({fields:'user(emailAddress),storageQuota(limit,usage)'},{timeout:15000});
+      if(data.user?.emailAddress?.toLowerCase()!==user.email.toLowerCase())return {ok:false,code:'ACCOUNT_MISMATCH',message:'Drive 帳號與登入帳號不同，請使用原教師帳號重新連接。'};
+      if(user.rootId)await this.checkFolder(drive,user.rootId);
+      const quota=data.storageQuota||{};
+      const full=quota.limit!==undefined&&quota.usage!==undefined&&BigInt(quota.usage)>=BigInt(quota.limit);
+      return {ok:!full,code:full?'STORAGE_FULL':'CONNECTED',message:full?'Google 回報儲存空間已滿，請先釋放空間。':'Drive API 連線成功。請再建立測試牆並確認同步，才能驗證寫入。',rootReady:!!user.rootId,checkedAt:new Date().toISOString()};
+    }catch(error){return driveDiagnosticError(error);}
+  }
   async find(drive,key,parent) {
     // Keys and parent IDs are created by the server, not accepted as search expressions from users.
     const q=`trashed = false and appProperties has { key='gpKey' and value='${key}' }`+(parent?` and '${parent}' in parents`:'');
@@ -65,4 +79,17 @@ export class DriveService {
   }); }
   async remove(ownerId,id) { await this.client(ownerId).files.update({fileId:id,requestBody:{trashed:true}}); }
   async download(ownerId,id) { return this.client(ownerId).files.get({fileId:id,alt:'media'},{responseType:'stream'}); }
+}
+
+// Do not expose upstream responses: OAuth failures may contain credentials or request URLs.
+export function driveDiagnosticError(error){
+  const status=Number(error.response?.status||error.code),data=error.response?.data;
+  const reason=data?.error?.errors?.[0]?.reason||data?.error?.status;
+  let code='CONNECTION_FAILED',message='無法連線，請檢查伺服器網路或稍後重試。';
+  if(data?.error==='invalid_grant'||status===401){code='REAUTHORIZE';message='授權已失效，請重新連接 Google Drive。';}
+  else if(status===404||error.status===409){code='FOLDER_UNAVAILABLE';message='原 Drive 資料夾無法使用，請檢查是否已刪除或移至垃圾桶。';}
+  else if(reason==='storageQuotaExceeded'){code='STORAGE_FULL';message='Google 回報儲存空間不足，請先釋放空間。';}
+  else if(status===429||reason==='rateLimitExceeded'||reason==='userRateLimitExceeded'){code='RATE_LIMIT';message='Google 暫時限制請求，請稍後再試。';}
+  else if(status===403){code='ACCESS_DENIED';message='Google 拒絕存取：請確認 Drive API 已啟用、教師已同意授權，以及學校允許此 OAuth 應用。';}
+  return {ok:false,code,message};
 }

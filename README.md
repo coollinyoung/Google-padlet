@@ -1,12 +1,19 @@
 # Google Padlet
 
-**v0.4.0｜教師 Google Drive 互動牆・開發預覽版**
+**v0.4.1｜教師 Google Drive 互動牆・開發預覽版**
 
 一面牆，收藏全班的觀察、作品與回饋。教師使用自己的 Google 帳號連接 Drive，每面互動牆對應 `Google Padlet / 互動牆名稱` 資料夾。
 
 作者：板橋國小 楊凱文。這是自主開發專案，並非 Google 或 Padlet 官方產品。
 
 > 本版已實作可執行的前後端、Google OAuth 與 Drive API 串接；尚未使用實際學校 OAuth 憑證完成端到端驗收。上線前請依 [部署教學](docs/DEPLOYMENT.zh-TW.md) 設定並驗收。**不是完整 Padlet 替代品，也不是 Apps Script / GitHub Pages 靜態網站。**
+
+## v0.4.1：觸控補強與學校 Drive 檢查
+
+- 觸控拖曳邊緣持續捲動、分欄橫向捲動、觸控取消及多指防護。
+- 教師專用 Drive 連線檢查，確認授權、帳號、API 讀取與根資料夾；不建立測試檔案。
+- `npm run doctor` 檢查本機設定格式並提示 OAuth 回呼網址，隱藏密鑰。
+- [學校 Drive 連線與手機驗收步驟](docs/SCHOOL-DRIVE.zh-TW.md)。仍須在您的帳號／裝置完成實測。
 
 ## v0.4.0 新增：投票、排序與底圖
 
