@@ -186,3 +186,51 @@ test('voting enforces moderation, deadline and freeze; templates start with no v
   await f.settings({deadlineAt:null});assert.equal((await vote()).status,200);
   const copy=await f.call('/template','POST',{title:'沒有票的模板'});assert.equal(f.store.board(copy.data.id).votes,undefined);
 });
+
+function wavFile(){
+  const b=Buffer.alloc(44+1600);b.write('RIFF');b.writeUInt32LE(b.length-8,4);b.write('WAVE',8);b.write('fmt ',12);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(8000,24);b.writeUInt32LE(16000,28);b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(1600,40);return b;
+}
+async function putFile(f,p,data,name='voice.wav',role='student',key=randomUUID()){
+  const form=new FormData();form.set('file',new Blob([data],{type:'application/octet-stream'}),name);
+  const r=await fetch(f.base+'/api/boards/'+f.b.id+'/posts/'+p+'/attachments',{method:'POST',headers:{Cookie:f.sessions[role],Origin:'http://localhost:3000','Idempotency-Key':key},body:form});return {status:r.status,data:await r.json()};
+}
+test('audio-only upload supports protected byte ranges, download and idempotent retry',async t=>{
+  const f=await setup(t),p=(await f.call('/posts','POST',{uploadPending:true},'student')).data.id,wav=wavFile(),key=randomUUID();
+  const a=await putFile(f,p,wav,'voice.wav','student',key);assert.equal(a.status,201);assert.equal((await putFile(f,p,wav,'voice.wav','student',key)).status,200);
+  const post=(await f.call()).data.posts[0];assert.equal(post.attachments.length,1);assert.equal(post.attachments[0].mime,'audio/wav');assert.equal(post.status,'published');
+  const url=f.base+'/api/boards/'+f.b.id+'/posts/'+p+'/attachments/'+a.data.id;
+  let r=await fetch(url,{headers:{Cookie:f.sessions.student,Range:'bytes=10-19'}});assert.equal(r.status,206);assert.equal(r.headers.get('content-range'),`bytes 10-19/${wav.length}`);assert.deepEqual(Buffer.from(await r.arrayBuffer()),wav.subarray(10,20));
+  r=await fetch(url+'?download=1',{headers:{Cookie:f.sessions.student}});assert.match(r.headers.get('content-disposition'),/^attachment/);await r.arrayBuffer();
+  assert.equal((await fetch(url)).status,401);
+  assert.equal((await f.call('/posts/'+p+'/attachments/'+a.data.id,'DELETE',{version:post.version},'student')).status,400);
+  await f.call('/posts/'+p,'PATCH',{version:post.version,body:'保留說明'},'student');
+  const updated=(await f.call()).data.posts[0];assert.equal((await f.call('/posts/'+p+'/attachments/'+a.data.id,'DELETE',{version:updated.version},'student')).status,200);
+  assert.equal((await fetch(url,{headers:{Cookie:f.sessions.student}})).status,404);
+  assert.equal((await putFile(f,p,wav,'voice.wav','student',key)).status,200);assert.equal((await f.call()).data.posts[0].attachments.length,0);
+});
+
+test('attachment management validates full order, owner/version, moderation and freeze',async t=>{
+  const f=await setup(t),p=(await f.call('/posts','POST',{body:'作品'},'student')).data.id;
+  const ids=[];for(let i=0;i<3;i++)ids.push((await putFile(f,p,wavFile(),`${i}.wav`)).data.id);
+  let post=(await f.call()).data.posts[0],route='/posts/'+p+'/attachments';
+  assert.equal((await f.call(route,'PATCH',{version:post.version,ids:ids.slice(1)},'student')).status,400);
+  assert.equal((await f.call(route,'PATCH',{version:post.version,ids:[ids[0],ids[0],ids[1]]},'student')).status,400);
+  assert.equal((await f.call(route,'PATCH',{version:post.version,ids:[...ids].reverse()},'other')).status,403);
+  await f.settings({moderation:true});
+  const key=randomUUID();assert.equal((await f.call(route,'PATCH',{version:post.version,ids:[...ids].reverse()},'student',key)).status,200);
+  assert.equal((await f.call(route,'PATCH',{version:post.version,ids:[...ids].reverse()},'student',key)).status,200);
+  assert.equal((await f.call(route,'PATCH',{version:post.version,ids},'student')).status,409);
+  post=(await f.call()).data.posts[0];assert.deepEqual(post.attachments.map(a=>a.id),[...ids].reverse());assert.equal(post.status,'pending');
+  assert.equal((await f.call(route+'/'+ids[0],'GET',undefined,'other')).status,404);
+  await f.settings({frozen:true});assert.equal((await f.call(route+'/'+ids[0],'DELETE',{version:post.version},'student')).status,403);
+  assert.equal((await putFile(f,p,wavFile())).status,403);
+  assert.equal((await f.call(route+'/'+ids[0],'DELETE',{version:post.version},'teacher')).status,200);
+});
+
+test('uploads reject disguised HTML and oversized images; media gets 50 MB allowance',async t=>{
+  const f=await setup(t),p=(await f.call('/posts','POST',{body:'作品'},'student')).data.id;
+  assert.equal((await putFile(f,p,Buffer.from('<html>bad</html>'),'video.mp4')).status,400);
+  const image=Buffer.alloc(10*1024*1024+1);Buffer.from([137,80,78,71,13,10,26,10]).copy(image);
+  assert.equal((await putFile(f,p,image,'big.png')).status,413);
+  const media=Buffer.alloc(11*1024*1024);wavFile().copy(media);assert.equal((await putFile(f,p,media,'large.wav')).status,201);
+});

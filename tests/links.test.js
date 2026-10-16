@@ -55,7 +55,7 @@ test('HTTP stores normalized links, enforces review/freeze and serves limited if
   const post=await call('/posts','POST',{links:[`https://youtu.be/${vid}`]});assert.equal(post.status,201);
   const hidden=await call('','GET',null,'other');assert.equal(hidden.data.posts.length,0);
   assert.match(hidden.headers.get('content-security-policy'),/frame-src https:\/\/www.youtube-nocookie.com;/);
-  assert.match(hidden.headers.get('content-security-policy'),/media-src https:;/);
+  assert.match(hidden.headers.get('content-security-policy'),/media-src 'self' https:;/);
   assert.equal(system.store.board(b.id).posts[0].links[0].videoId,vid);
   await call('/posts/'+post.data.id+'/approve','POST',{},'owner');assert.equal((await call('','GET',null,'other')).data.posts[0].links.length,1);
   const before=system.store.row(b.id).version;
@@ -68,7 +68,7 @@ test('client builds click-to-load players with safe source, explicit referrer an
   function element(){return {innerHTML:'',children:[],addEventListener(){},replaceChildren(...children){this.children=children;},append(x){this.children.push(x);}};}
   const elements=new Map();const doc={querySelector(s){if(!elements.has(s))elements.set(s,element());return elements.get(s);},addEventListener(){},createElement(tag){return {...element(),tag};}};
   const context=vm.createContext({document:doc,location:{search:'',pathname:'/'},URLSearchParams,URL,FormData,console,crypto:{randomUUID},fetch:async()=>({ok:true,json:async()=>({user:null,demo:true})}),setTimeout,clearTimeout});
-  vm.runInContext(readFileSync(new URL('../public/app.js',import.meta.url),'utf8')+'\nglobalThis.helpers={linkCards,playMedia,loadBoard};',context);
+  vm.runInContext(readFileSync(new URL('../public/app.js',import.meta.url),'utf8')+'\nglobalThis.helpers={linkCards,playMedia,loadBoard,playFile,attachmentCards};',context);
   const p={id:'post-1',title:'標題',links:normalizeLinks([`https://youtu.be/${vid}?t=90`,'https://example.com/?x=%22'])};
   const html=context.helpers.linkCards(p);assert.ok(!html.includes('<iframe'));assert.match(html,/data-action="play-media"/);assert.match(html,/noopener noreferrer/);
   context.helpers.playMedia(p,0);const frame=elements.get('#media-post-1-0').children[0];assert.equal(frame.tag,'iframe');assert.equal(frame.referrerPolicy,'strict-origin-when-cross-origin');assert.equal(frame.src,`https://www.youtube-nocookie.com/embed/${vid}?playsinline=1&autoplay=0&start=90`);
@@ -82,5 +82,13 @@ test('client builds click-to-load players with safe source, explicit referrer an
   context.fetch=async()=>({ok:true,json:async()=>({...initial,version:3,posts:[]})});
   await context.helpers.loadBoard('b',true);
   assert.equal(vm.runInContext('activeEmbeds.size',context),0);
+  const uploaded={...p,attachments:[{id:'audio1',mime:'audio/mpeg',name:'test.mp3',size:40}]};
+  context.initial={...initial,posts:[uploaded]};vm.runInContext('board=initial;',context);
+  const attachmentHtml=context.helpers.attachmentCards(uploaded);assert.ok(!attachmentHtml.includes('<audio'));assert.match(attachmentHtml,/play-file/);
+  context.helpers.playFile(uploaded,'audio1');const audio=elements.get('#file-post-1-audio1').children[0];assert.equal(audio.tag,'audio');assert.equal(audio.preload,'metadata');assert.match(audio.src,/attachments\/audio1$/);
+  context.fetch=async()=>({ok:true,json:async()=>({...initial,version:4,posts:[{...uploaded,attachments:[]}]})});
+  // The test replaces rendering because the small DOM stub does not implement a full card tree.
+  vm.runInContext('renderBoard=()=>{activeEmbeds.clear();};',context);
+  await context.helpers.loadBoard('b',true);assert.equal(vm.runInContext('activeEmbeds.size',context),0);
   const malicious={id:'bad',title:'',links:[{kind:'youtube',videoId:'bad" onload="x',url:'https://example.com'}]};context.helpers.playMedia(malicious,0);assert.equal(elements.get('#media-bad-0').children.length,0);
 });

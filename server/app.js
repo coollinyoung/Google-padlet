@@ -1,4 +1,5 @@
 import express from 'express';
+import {mediaMime,byteRange} from './media.js';
 import multer from 'multer';
 import QRCode from 'qrcode';
 import path from 'node:path';
@@ -16,7 +17,7 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
   app.disable('x-powered-by');
   app.use((req,res,next)=>{
     res.set({'X-Content-Type-Options':'nosniff','Referrer-Policy':'same-origin','X-Frame-Options':'DENY',
-      'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; frame-src https://www.youtube-nocookie.com; media-src https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});
+      'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; frame-src https://www.youtube-nocookie.com; media-src 'self' https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});
     if(req.path.startsWith('/api')||req.path.startsWith('/auth'))res.set('Cache-Control','no-store');
     if(!['GET','HEAD','OPTIONS'].includes(req.method) && req.get('origin')!==config.baseUrl) return next(Object.assign(new Error('請從本站頁面操作。'),{status:403}));
     req.user=store.session(cookies(req).gp_session);
@@ -36,9 +37,9 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
   registerAuth(app,store,config);
   app.get('/api/session',(req,res)=>{
     const u=req.user;
-    res.json({version:'0.4.1',demo:config.demo,user:u?{id:u.id,name:u.name,email:u.email,teacher:u.teacher,driveConnected:config.demo||!!u.credentials}:null});
+    res.json({version:'0.5.0',demo:config.demo,user:u?{id:u.id,name:u.name,email:u.email,teacher:u.teacher,driveConnected:config.demo||!!u.credentials}:null});
   });
-  app.get('/healthz',(req,res)=>res.json({ok:true,version:'0.4.1'}));
+  app.get('/healthz',(req,res)=>res.json({ok:true,version:'0.5.0'}));
   app.use('/api',(req,res,next)=>{if(!req.user)return res.status(401).json({error:'請先登入。'});next();});
   app.post('/api/drive/check',async(req,res)=>{
     if(!req.user.teacher)fail(403,'只有教師可檢查 Drive 連線。');
@@ -152,15 +153,33 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
     if(config.demo){if(!existsSync(a.localPath))fail(404,'底圖檔案不存在。');return res.sendFile(a.localPath);}
     const {data}=await drive.download(b.ownerId,a.driveId);data.on('error',()=>res.destroy());data.pipe(res);
   });
+  const mediaUpload=multer({storage:multer.memoryStorage(),limits:{fileSize:50*1024*1024,files:1,fields:0}});
+  let activeUploads=0;
+  function attachmentUpload(req,res,next){
+    if(activeUploads>=2)return next(Object.assign(new Error('上傳忙碌中，請稍後重試。'),{status:503}));
+    activeUploads++;req.uploadLimit=50;
+    mediaUpload.single('file')(req,res,err=>{
+      if(err){activeUploads--;return next(err);}
+      // Keep the slot until the handler finishes, including Drive upload.
+      let released=false;const release=()=>{if(!released){released=true;activeUploads--;}};
+      req.releaseUpload=release;next();
+    });
+  }
+  app.patch('/api/boards/:id/posts/:postId/attachments',(req,res)=>res.json(mutate(req,'attachment.order',(b,u)=>domain.changeAttachments(b,u,req.params.postId,req.body))));
+  app.delete('/api/boards/:id/posts/:postId/attachments/:attachmentId',(req,res)=>res.json(mutate(req,'attachment.remove',(b,u)=>domain.changeAttachments(b,u,req.params.postId,req.body,req.params.attachmentId))));
   app.post('/api/boards/:id/posts/:postId/attachments',(req,res,next)=>{
     domain.editable(get(req),req.user,req.params.postId);next();
-  },upload.single('file'),async(req,res)=>{
+  },attachmentUpload,async(req,res)=>{
+    try{
     const b=get(req),p=domain.editable(b,req.user,req.params.postId),f=req.file;
     const op=req.get('Idempotency-Key');if(!/^[\w-]{8,100}$/.test(op||''))fail(400,'缺少有效操作識別碼。');
     const attachmentId=createHash('sha256').update(b.id+':'+req.user.id+':'+op).digest('hex');
+    const replay=store.db.prepare('SELECT result FROM operations WHERE board_id=? AND user_id=? AND id=?').get(b.id,req.user.id,op);
+    if(replay)return res.json(JSON.parse(replay.result));
     if(p.attachments.some(a=>a.id===attachmentId))return res.json({id:attachmentId});
     if(!f)fail(400,'請選擇檔案。');if(p.attachments.length>=5)fail(400,'每篇最多 5 個附件。');
-    const mime=detectMime(f.buffer);if(!mime)fail(400,'第一版支援 PNG、JPEG、WebP 與 PDF，每檔最多 10 MB。');
+    const mime=detectMime(f.buffer)||mediaMime(f.buffer);if(!mime)fail(400,'不支援的檔案內容，請使用圖片、PDF、MP4、WebM、MP3、M4A、WAV 或 OGG 音訊。');
+    if(!/^(audio|video)\//.test(mime)&&f.size>10*1024*1024)fail(413,'圖片與 PDF 最多 10 MB。');
     f.mimetype=mime;f.originalname=Buffer.from(f.originalname,'latin1').toString('utf8').replace(/[\r\n/\\]/g,'_').slice(0,160)||'attachment';
     const attachment={id:attachmentId,name:f.originalname,mime,size:f.size};
     if(config.demo){
@@ -180,15 +199,22 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
       // Maintenance is documented; it is never served without a committed attachment relationship.
       throw e;
     }
+    }finally{req.releaseUpload?.();}
   });
   app.get('/api/boards/:id/posts/:postId/attachments/:attachmentId',async(req,res)=>{
     const b=get(req),p=domain.postFor(b,req.user,req.params.postId),a=p.attachments.find(a=>a.id===req.params.attachmentId);
     if(!a)fail(404,'找不到附件。');
-    const inline=a.mime.startsWith('image/');
+    const inline=req.query.download!=='1'&&/^(image|audio|video)\//.test(a.mime);
     res.set('Content-Type',a.mime);res.set('Content-Disposition',`${inline?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(a.name)}`);
     if(config.demo){if(!existsSync(a.localPath))fail(404,'示範附件不存在。');return res.sendFile(a.localPath);}
-    const {data}=await drive.download(b.ownerId,a.driveId);
-    data.on('error',()=>res.destroy());data.pipe(res);
+    let range;
+    try{range=byteRange(req.get('range'),a.size);}catch(e){res.set('Content-Range',`bytes */${a.size}`);throw e;}
+    const response=await drive.download(b.ownerId,a.driveId,range?`bytes=${range.start}-${range.end}`:undefined);
+    if(range&&response.status!==206){response.data.destroy();throw new Error('Drive range response mismatch');}
+    res.set('Accept-Ranges','bytes');
+    if(range){res.status(206).set('Content-Range',`bytes ${range.start}-${range.end}/${a.size}`).set('Content-Length',String(range.end-range.start+1));}
+    else res.set('Content-Length',String(a.size));
+    response.data.on('error',()=>res.destroy());res.on('close',()=>response.data.destroy());response.data.pipe(res);
   });
   app.use(express.static(publicDir,{index:'index.html',maxAge:0}));
   app.use((req,res)=>res.status(404).json({error:'找不到此路徑。'}));
@@ -197,7 +223,7 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
     const status=err.code==='LIMIT_FILE_SIZE'?413:(err.status>=400&&err.status<500?err.status:500);
     // Never log OAuth tokens, upstream response objects, request bodies, or cookies.
     if(status===500)console.error('Request failed:',req.method,req.path,err.name||'Error');
-    res.status(status).json({error:err.code==='LIMIT_FILE_SIZE'?'檔案超過 10 MB。':status===500?'服務暫時無法完成操作，請稍後重試；若為 Drive 操作，請檢查授權與空間。':err.message});
+    res.status(status).json({error:err.code==='LIMIT_FILE_SIZE'?`檔案超過 ${req.uploadLimit||10} MB。`:status===500?'服務暫時無法完成操作，請稍後重試；若為 Drive 操作，請檢查授權與空間。':err.message});
   });
   async function tick(){
     if(busy||config.demo||stopping)return;busy=true;

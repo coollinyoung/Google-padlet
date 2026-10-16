@@ -78,7 +78,7 @@ export class DriveService {
     return data.id;
   }); }
   async remove(ownerId,id) { await this.client(ownerId).files.update({fileId:id,requestBody:{trashed:true}}); }
-  async download(ownerId,id) { return this.client(ownerId).files.get({fileId:id,alt:'media'},{responseType:'stream'}); }
+  async download(ownerId,id,range) { return this.client(ownerId).files.get({fileId:id,alt:'media'},{responseType:'stream',...(range?{headers:{Range:range}}:{})}); }
 }
 
 // Do not expose upstream responses: OAuth failures may contain credentials or request URLs.

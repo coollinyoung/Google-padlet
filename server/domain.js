@@ -57,7 +57,7 @@ function content(body,b,previous) {
   const color=['cream','blue','pink','green'].includes(body.color)?body.color:'cream';
   const links=normalizeLinks(body.links===undefined?(previous?.links||[]).map(link=>link.url):body.links);
   const message=text(body.body||'',10000);
-  if(!message&&!links.length)fail(400,'請填寫內容或至少加入一個網址。');
+  if(!message&&!links.length&&!previous?.attachments?.length&&body.uploadPending!==true)fail(400,'請填寫內容或至少加入一個網址。');
   return {links,title:text(body.title||'',160),body:message,section:b.sections.includes(body.section)?body.section:b.sections[0],color};
 }
 export function addPost(b,u,body) {
@@ -151,4 +151,20 @@ export function setVote(b,u,id,body){
   b.votes||={};
   if(body.voted)b.votes[u.id]=p.id;
   else if(b.votes[u.id]===p.id)delete b.votes[u.id];
+}
+
+export function changeAttachments(b,u,id,body,removeId){
+  const p=editable(b,u,id);
+  if(body.version!==p.version)fail(409,'貼文已更新，請重新開啟附件管理。');
+  if(removeId){
+    if(!p.attachments.some(a=>a.id===removeId))fail(404,'找不到附件。');
+    if(p.attachments.length===1&&!p.body&&!p.links?.length)fail(400,'請先加入文字或網址，才能移除最後一個附件。');
+    p.attachments=p.attachments.filter(a=>a.id!==removeId);
+  }else{
+    const ids=body.ids;
+    if(!Array.isArray(ids)||ids.length!==p.attachments.length||new Set(ids).size!==ids.length||ids.some(id=>!p.attachments.some(a=>a.id===id)))fail(400,'附件排序必須包含全部附件，不能重複或遺漏。');
+    p.attachments=ids.map(id=>p.attachments.find(a=>a.id===id));
+  }
+  p.version++;
+  if(b.moderation&&b.ownerId!==u.id&&p.status!=='uploading')p.status='pending';
 }
