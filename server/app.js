@@ -36,21 +36,21 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
   registerAuth(app,store,config);
   app.get('/api/session',(req,res)=>{
     const u=req.user;
-    res.json({version:'0.1.0',demo:config.demo,user:u?{id:u.id,name:u.name,email:u.email,teacher:u.teacher,driveConnected:config.demo||!!u.credentials}:null});
+    res.json({version:'0.2.0',demo:config.demo,user:u?{id:u.id,name:u.name,email:u.email,teacher:u.teacher,driveConnected:config.demo||!!u.credentials}:null});
   });
-  app.get('/healthz',(req,res)=>res.json({ok:true,version:'0.1.0'}));
+  app.get('/healthz',(req,res)=>res.json({ok:true,version:'0.2.0'}));
   app.use('/api',(req,res,next)=>{if(!req.user)return res.status(401).json({error:'請先登入。'});next();});
   const publish=id=>{
     for(const s of streams)if(s.boardId===id){
       const u=store.session(s.sessionId);
-      if(!domain.canRead(store.board(id),u)){s.res.end();streams.delete(s);}else s.res.write('event: refresh\ndata: {}\n\n');
+      if(!domain.canRead(store.board(id),u)){s.res.write('event: revoked\ndata: {}\n\n');s.res.end();streams.delete(s);}else s.res.write('event: refresh\ndata: {}\n\n');
     }
   };
   function get(req){const b=store.board(req.params.id);domain.access(b,req.user);return b;}
   function mutate(req,action,fn){
     get(req);const result=store.mutate(req.params.id,req.user.id,req.get('Idempotency-Key'),action,b=>fn(b,req.user));publish(req.params.id);return result;
   }
-  app.get('/api/boards',(req,res)=>res.json(store.list(req.user.id).map(row=>({row,b:JSON.parse(row.data)})).filter(({b})=>domain.canRead(b,req.user)).map(({b})=>({id:b.id,title:b.title,description:b.description,layout:b.layout,frozen:b.frozen,isOwner:b.ownerId===req.user.id,updatedAt:b.updatedAt}))));
+  app.get('/api/boards',(req,res)=>res.json(store.list(req.user.id).map(row=>({row,b:JSON.parse(row.data)})).filter(({b})=>domain.canRead(b,req.user)).map(({b})=>({id:b.id,title:b.title,description:b.description,layout:b.layout,frozen:b.frozen,lifecycle:b.lifecycle||'active',isOwner:b.ownerId===req.user.id,updatedAt:b.updatedAt}))));
   app.post('/api/boards',(req,res)=>{
     if(!config.demo&&!req.user.credentials)fail(409,'請先連接 Google Drive。');
     const op=req.get('Idempotency-Key');if(!/^[\w-]{8,100}$/.test(op||''))fail(400,'缺少有效操作識別碼。');
@@ -66,12 +66,28 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
     res.set({'Content-Type':'text/event-stream','Cache-Control':'no-cache','X-Accel-Buffering':'no'});res.flushHeaders();
     const s={boardId:req.params.id,res,sessionId:cookies(req).gp_session};streams.add(s);res.write('event: ready\ndata: {}\n\n');
     const heartbeat=setInterval(()=>{
-      if(!domain.canRead(store.board(s.boardId),store.session(s.sessionId))){res.end();return;}
+      if(!domain.canRead(store.board(s.boardId),store.session(s.sessionId))){res.write('event: revoked\ndata: {}\n\n');res.end();return;}
       res.write(': heartbeat\n\n');
     },20000);
     req.on('close',()=>{clearInterval(heartbeat);streams.delete(s);});
   });
   app.patch('/api/boards/:id',(req,res)=>res.json(mutate(req,'settings',(b,u)=>domain.settings(b,u,req.body))));
+  app.patch('/api/boards/:id/lifecycle',(req,res)=>res.json(mutate(req,'board.lifecycle',(b,u)=>domain.lifecycle(b,u,req.body))));
+  app.post('/api/boards/:id/template',(req,res)=>{
+    const source=get(req);domain.owner(source,req.user);
+    const op=req.get('Idempotency-Key');if(!/^[\w-]{8,100}$/.test(op||''))fail(400,'缺少有效操作識別碼。');
+    const id=createHash('sha256').update('template:'+source.id+':'+req.user.id+':'+op).digest('hex');
+    if(store.row(id))return res.json({id});
+    const copy=domain.template(source,req.user,req.body);copy.id=id;store.create(copy);res.status(201).json({id});
+  });
+  app.get('/api/boards/:id/trash',(req,res)=>{
+    const b=get(req);domain.owner(b,req.user);
+    res.json(b.posts.filter(p=>p.deleted).map(p=>({id:p.id,title:p.title,authorName:p.authorName,deletedAt:p.deletedAt||null,status:p.status})));
+  });
+  app.post('/api/boards/:id/posts/:postId/restore',(req,res)=>res.json(mutate(req,'post.restore',(b,u)=>domain.restorePost(b,u,req.params.postId))));
+  app.get('/api/boards/:id/export.csv',(req,res)=>{
+    const b=get(req);res.attachment('google-padlet-'+b.id+'.csv').type('text/csv; charset=utf-8').send(domain.exportCsv(b,req.user));
+  });
   app.post('/api/boards/:id/posts',(req,res)=>res.status(201).json(mutate(req,'post.create',(b,u)=>domain.addPost(b,u,req.body))));
   app.patch('/api/boards/:id/posts/:postId',(req,res)=>res.json(mutate(req,'post.edit',(b,u)=>domain.editPost(b,u,req.params.postId,req.body))));
   app.delete('/api/boards/:id/posts/:postId',(req,res)=>res.json(mutate(req,'post.delete',(b,u)=>domain.removePost(b,u,req.params.postId))));
