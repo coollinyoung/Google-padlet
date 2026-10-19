@@ -37,9 +37,9 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
   registerAuth(app,store,config);
   app.get('/api/session',(req,res)=>{
     const u=req.user;
-    res.json({version:'0.5.0',demo:config.demo,user:u?{id:u.id,name:u.name,email:u.email,teacher:u.teacher,driveConnected:config.demo||!!u.credentials}:null});
+    res.json({version:'0.6.0',demo:config.demo,user:u?{id:u.id,name:u.name,email:u.email,teacher:u.teacher,driveConnected:config.demo||!!u.credentials}:null});
   });
-  app.get('/healthz',(req,res)=>res.json({ok:true,version:'0.5.0'}));
+  app.get('/healthz',(req,res)=>res.json({ok:true,version:'0.6.0'}));
   app.use('/api',(req,res,next)=>{if(!req.user)return res.status(401).json({error:'請先登入。'});next();});
   app.post('/api/drive/check',async(req,res)=>{
     if(!req.user.teacher)fail(403,'只有教師可檢查 Drive 連線。');
@@ -78,6 +78,7 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
   });
   app.patch('/api/boards/:id',(req,res)=>res.json(mutate(req,'settings',(b,u)=>domain.settings(b,u,req.body))));
   app.post('/api/boards/:id/reorder',(req,res)=>res.json(mutate(req,'post.reorder',(b,u)=>domain.reorderPost(b,u,req.body))));
+  app.patch('/api/boards/:id/theme',(req,res)=>res.json(mutate(req,'theme.set',(b,u)=>domain.changeTheme(b,u,req.body))));
   app.patch('/api/boards/:id/lifecycle',(req,res)=>res.json(mutate(req,'board.lifecycle',(b,u)=>domain.lifecycle(b,u,req.body))));
   app.post('/api/boards/:id/template',(req,res)=>{
     const source=get(req);domain.owner(source,req.user);
@@ -136,15 +137,15 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
     res.json(mutate(req,'background.set',(board,u)=>{
       domain.owner(board,u);domain.writable(board,u);
       if(board.version!==version)fail(409,'互動牆已更新，請重新開啟底圖設定。');
-      board.background=background;
+      board.background=background;board.theme='custom';
     }));
   });
   app.patch('/api/boards/:id/background',(req,res)=>res.json(mutate(req,'background.mode',(b,u)=>{
     domain.owner(b,u);domain.writable(b,u);
     if(req.body.version!==b.version)fail(409,'互動牆已更新，請重新開啟底圖設定。');
-    if(req.body.mode===null){b.background=null;return;}
+    if(req.body.mode===null){b.background=null;b.theme='ivory';return;}
     if(!['tile','width'].includes(req.body.mode)||!b.background)fail(400,'請先上傳底圖並選擇鋪排方式。');
-    b.background.mode=req.body.mode;
+    b.background.mode=req.body.mode;b.theme='custom';
   })));
   app.get('/api/boards/:id/background/:backgroundId',async(req,res)=>{
     const b=get(req),a=b.background;

@@ -234,3 +234,34 @@ test('uploads reject disguised HTML and oversized images; media gets 50 MB allow
   assert.equal((await putFile(f,p,image,'big.png')).status,413);
   const media=Buffer.alloc(11*1024*1024);wavFile().copy(media);assert.equal((await putFile(f,p,media,'large.wav')).status,201);
 });
+
+test('five themes persist for students, validate ownership/version and preserve custom wallpaper',async t=>{
+  const f=await setup(t);
+  for(const theme of ['ivory','sage','porcelain','rose','noir']){
+    const version=(await f.call()).data.version;
+    assert.equal((await f.call('/theme','PATCH',{theme,version},'student')).status,403);
+    const key=randomUUID();assert.equal((await f.call('/theme','PATCH',{theme,version},'teacher',key)).status,200);
+    assert.equal((await f.call('/theme','PATCH',{theme,version},'teacher',key)).status,200);
+    assert.equal((await f.call('','GET',undefined,'student')).data.theme,theme);
+    assert.equal((await f.call('/theme','PATCH',{theme,version})).status,409);
+  }
+  let version=(await f.call()).data.version;
+  assert.equal((await f.call('/theme','PATCH',{theme:'../../bad',version})).status,400);
+  assert.equal((await f.call('/theme','PATCH',{theme:'custom',version})).status,400);
+  f.store.mutate(f.b.id,f.teacher.id,randomUUID(),'fixture',b=>{b.background={id:'existing',name:'photo.png',mode:'tile',localPath:'/private'};b.theme='custom';});
+  version=(await f.call()).data.version;
+  await f.call('/theme','PATCH',{theme:'rose',version});
+  const b=(await f.call()).data;assert.equal(b.background.id,'existing');assert.equal(b.background.localPath,undefined);
+  assert.equal((await f.call('/theme','PATCH',{theme:'custom',version:b.version})).status,200);
+  assert.equal((await f.call()).data.theme,'custom');
+  await f.lifecycle('archived');version=(await f.call()).data.version;
+  assert.equal((await f.call('/theme','PATCH',{theme:'sage',version})).status,403);
+});
+
+test('legacy backgrounds stay selected and templates inherit built-in theme',async t=>{
+  const f=await setup(t);
+  f.store.mutate(f.b.id,f.teacher.id,randomUUID(),'legacy',b=>{delete b.theme;b.background={id:'legacy',mode:'tile'};});
+  let b=(await f.call()).data;assert.equal(b.theme,'custom');
+  await f.call('/theme','PATCH',{theme:'porcelain',version:b.version});
+  const copy=await f.call('/template','POST',{title:'青瓷模板'});assert.equal(f.store.board(copy.data.id).theme,'porcelain');assert.equal(f.store.board(copy.data.id).background,undefined);
+});

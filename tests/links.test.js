@@ -65,7 +65,7 @@ test('HTTP stores normalized links, enforces review/freeze and serves limited if
 });
 
 test('client builds click-to-load players with safe source, explicit referrer and escaped links',async()=>{
-  function element(){return {innerHTML:'',children:[],addEventListener(){},replaceChildren(...children){this.children=children;},append(x){this.children.push(x);}};}
+  function element(){return {innerHTML:'',classList:{add(){}},children:[],addEventListener(){},replaceChildren(...children){this.children=children;},append(x){this.children.push(x);}};}
   const elements=new Map();const doc={querySelector(s){if(!elements.has(s))elements.set(s,element());return elements.get(s);},addEventListener(){},createElement(tag){return {...element(),tag};}};
   const context=vm.createContext({document:doc,location:{search:'',pathname:'/'},URLSearchParams,URL,FormData,console,crypto:{randomUUID},fetch:async()=>({ok:true,json:async()=>({user:null,demo:true})}),setTimeout,clearTimeout});
   vm.runInContext(readFileSync(new URL('../public/app.js',import.meta.url),'utf8')+'\nglobalThis.helpers={linkCards,playMedia,loadBoard,playFile,attachmentCards};',context);

@@ -1,6 +1,8 @@
 import {normalizeLinks} from './links.js';
 import {randomUUID} from 'node:crypto';
 import {fail} from './store.js';
+export const themes=['ivory','sage','porcelain','rose','noir'];
+export function boardTheme(b){return themes.includes(b.theme)?b.theme:b.background?'custom':'ivory';}
 export const layouts = ['wall','grid','columns','stream'];
 export function text(value, max, required = false) {
   if (typeof value !== 'string' || value.length > max || (required && !value.trim())) fail(400,'文字內容未填寫或超過長度限制。');
@@ -23,7 +25,7 @@ export function newBoard(u, body, defaultDomain) {
   if (!u.teacher) fail(403,'只有教師名單中的帳號可以建立互動牆。');
   const now = new Date().toISOString();
   const b = {schemaVersion:1,id:randomUUID(),ownerId:u.id,title:text(body.title,100,true),description:text(body.description||'',2000),
-    domain:defaultDomain,allowedEmails:[],layout:'wall',moderation:false,frozen:false,sections:['分享區','觀察與發現','提問與回饋'],
+    theme:'ivory',domain:defaultDomain,allowedEmails:[],layout:'wall',moderation:false,frozen:false,sections:['分享區','觀察與發現','提問與回饋'],
     lifecycle:'active',deadlineAt:null,maxPostsPerStudent:0,posts:[],version:1,createdAt:now,updatedAt:now};
   if (layouts.includes(body.layout)) b.layout=body.layout;
   return b;
@@ -93,7 +95,7 @@ export function setLike(b,u,id,body) {
 }
 export function publicBoard(b,u,row,demo=false) {
   access(b,u); const own=b.ownerId===u.id;
-  return {...b,votes:undefined,votingEnabled:!!b.votingEnabled,background:b.background?{id:b.background.id,name:b.background.name,mode:b.background.mode}:null,lifecycle:b.lifecycle||'active',deadlineAt:b.deadlineAt||null,maxPostsPerStudent:b.maxPostsPerStudent||0,allowedEmails:own?b.allowedEmails:[],
+  return {...b,theme:boardTheme(b),votes:undefined,votingEnabled:!!b.votingEnabled,background:b.background?{id:b.background.id,name:b.background.name,mode:b.background.mode}:null,lifecycle:b.lifecycle||'active',deadlineAt:b.deadlineAt||null,maxPostsPerStudent:b.maxPostsPerStudent||0,allowedEmails:own?b.allowedEmails:[],
     posts:b.posts.filter(p=>!p.deleted&&(p.status==='published'||own||p.authorId===u.id)).map(p=>({...p,likes:undefined,likeCount:p.likes.length,liked:p.likes.includes(u.id),voteCount:Object.values(b.votes||{}).filter(id=>id===p.id).length,voted:b.votes?.[u.id]===p.id,
       attachments:p.attachments.map(({driveId,localPath,...a})=>a)})),
     isOwner:own,sync: own?{demo,version:row.sync_version,current:row.version,error:row.sync_error,folderId:JSON.parse(row.drive).folderId||null}:{demo}};
@@ -116,7 +118,7 @@ export function restorePost(b,u,id) {
 export function template(b,u,body) {
   owner(b,u);
   const copy=newBoard(u,{title:body.title,description:b.description,layout:b.layout},b.domain);
-  copy.sections=[...b.sections];copy.moderation=b.moderation;copy.maxPostsPerStudent=b.maxPostsPerStudent||0;
+  copy.theme=themes.includes(boardTheme(b))?boardTheme(b):'ivory';copy.sections=[...b.sections];copy.moderation=b.moderation;copy.maxPostsPerStudent=b.maxPostsPerStudent||0;
   return copy;
 }
 // Quote all cells and neutralize spreadsheet formula prefixes, including leading whitespace.
@@ -167,4 +169,11 @@ export function changeAttachments(b,u,id,body,removeId){
   }
   p.version++;
   if(b.moderation&&b.ownerId!==u.id&&p.status!=='uploading')p.status='pending';
+}
+
+export function changeTheme(b,u,body){
+  owner(b,u);writable(b,u);
+  if(body.version!==b.version)fail(409,'互動牆已更新，請重新整理後再切換主題。');
+  if(!themes.includes(body.theme)&&!(body.theme==='custom'&&b.background))fail(400,'請選擇內建主題，或先上傳自訂底圖。');
+  b.theme=body.theme;
 }

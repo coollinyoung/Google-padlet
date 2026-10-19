@@ -15,6 +15,7 @@ test('client renders teacher background and voting; pointer drag commits target 
   const post=id=>({id,color:'cream',title:id,body:'test',authorId:'student',authorName:'學生',createdAt:'2026-10-16T00:00:00Z',status:'published',links:[],attachments:[],comments:[],section:'分享',voteCount:1,voted:id==='a'});
   context.initial={id:'wall',version:3,title:'牆',domain:'school.edu.tw',description:'',layout:'grid',lifecycle:'active',isOwner:true,votingEnabled:true,sections:['分享'],posts:[post('a'),post('b')],sync:{demo:true},background:{id:'bg',mode:'width'}};
   vm.runInContext("board=initial;session={user:{id:'teacher'},demo:true};view='grid';renderBoard();",context);
+  assert.equal((elements.get('#app').innerHTML.match(/data-action="theme"/g)||[]).length,6);
   const surface=elements.get('#wall-surface');assert.equal(surface.style.backgroundRepeat,'repeat-y');assert.equal(surface.style.backgroundSize,'100% auto');assert.match(surface.style.backgroundImage,/\/api\/boards\/wall\/background\/bg/);
   assert.match(elements.get('#posts').innerHTML,/data-drag="a"/);assert.match(elements.get('#posts').innerHTML,/✓ 已投票/);
   let captured;const handle={dataset:{drag:'a'},setPointerCapture(id){captured=id;},closest(){return source;}};
@@ -28,5 +29,5 @@ test('client renders teacher background and voting; pointer drag commits target 
   await listeners.pointercancel[0]({pointerId:8});assert.equal(vm.runInContext('dragState',context),null);
   await listeners.pointerdown[0]({target:{closest:()=>handle},button:0,pointerId:9,isPrimary:false,preventDefault(){}});assert.equal(vm.runInContext('dragState',context),null);
   vm.runInContext("board.isOwner=false;session.user.id='student';renderPosts();",context);
-  assert.ok(!elements.get('#posts').innerHTML.includes('data-drag='));assert.match(elements.get('#posts').innerHTML,/data-action="vote"/);
+  assert.equal(vm.runInContext('themeButtons()',context),'');assert.ok(!elements.get('#posts').innerHTML.includes('data-drag='));assert.match(elements.get('#posts').innerHTML,/data-action="vote"/);
 });
