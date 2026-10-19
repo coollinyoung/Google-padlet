@@ -1,12 +1,24 @@
 # Google Padlet
 
-**v0.6.0｜教師 Google Drive 互動牆・開發預覽版**
+**v0.7.0｜教師 Google Drive 互動牆・開發預覽版**
 
 一面牆，收藏全班的觀察、作品與回饋。教師使用自己的 Google 帳號連接 Drive，每面互動牆對應 `Google Padlet / 互動牆名稱` 資料夾。
 
 作者：板橋國小 楊凱文。這是自主開發專案，並非 Google 或 Padlet 官方產品。
 
 > 本版已實作可執行的前後端、Google OAuth 與 Drive API 串接；尚未使用實際學校 OAuth 憑證完成端到端驗收。上線前請依 [部署教學](docs/DEPLOYMENT.zh-TW.md) 設定並驗收。**不是完整 Padlet 替代品，也不是 Apps Script / GitHub Pages 靜態網站。**
+
+## GitHub Pages 互動展示（v0.7.0）
+
+展示版發布分支：`gh-pages`。首次須由儲存庫管理員在 Settings → Pages 選擇 Deploy from a branch → gh-pages → /(root)。
+
+預定網址：https://coollinyoung.github.io/Google-padlet/ （需先完成 Pages 啟用與部署。）
+
+- 不需安裝或 Google 帳號，可體驗教師／學生角色、五套主題、貼文、投票與附件管理。
+- 資料與附件只保存在目前瀏覽器 IndexedDB，沒有 Drive 同步與跨裝置協作；可一鍵重設。
+- 展示版附件上限 5 MB；正式伺服器版的限制不變。
+- `npm run demo:build` 產生 `dist-demo`；只複製展示用程式與圖案，不包含 `.env`、SQLite 或真實資料。
+- [Pages 啟用與更新說明](docs/GITHUB-PAGES.zh-TW.md)。
 
 ## v0.6.0：五套典雅佈景
 

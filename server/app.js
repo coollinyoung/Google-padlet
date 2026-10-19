@@ -37,9 +37,9 @@ export function createApp(config,{store=new Store(config.dataDir),drive=new Driv
   registerAuth(app,store,config);
   app.get('/api/session',(req,res)=>{
     const u=req.user;
-    res.json({version:'0.6.0',demo:config.demo,user:u?{id:u.id,name:u.name,email:u.email,teacher:u.teacher,driveConnected:config.demo||!!u.credentials}:null});
+    res.json({version:'0.7.0',demo:config.demo,user:u?{id:u.id,name:u.name,email:u.email,teacher:u.teacher,driveConnected:config.demo||!!u.credentials}:null});
   });
-  app.get('/healthz',(req,res)=>res.json({ok:true,version:'0.6.0'}));
+  app.get('/healthz',(req,res)=>res.json({ok:true,version:'0.7.0'}));
   app.use('/api',(req,res,next)=>{if(!req.user)return res.status(401).json({error:'請先登入。'});next();});
   app.post('/api/drive/check',async(req,res)=>{
     if(!req.user.teacher)fail(403,'只有教師可檢查 Drive 連線。');

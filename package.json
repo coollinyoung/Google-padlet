@@ -1,6 +1,6 @@
 {
   "name": "google-padlet",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "教師 Google Drive 互動牆",
@@ -11,6 +11,7 @@
     "demo": "node scripts/demo.js",
     "test": "node --test tests/*.test.js",
     "check": "node scripts/check.js",
+    "demo:build": "node scripts/build-demo.js",
     "doctor": "node --env-file-if-exists=.env scripts/doctor.js"
   },
   "dependencies": {"express": "^5.1.0", "googleapis": "^160.0.0", "multer": "^2.0.2", "qrcode": "^1.5.4"}
