@@ -1,6 +1,6 @@
 import {normalizeLinks} from './links.js';
-import {randomUUID} from 'node:crypto';
-import {fail} from './store.js';
+const randomUUID=()=>crypto.randomUUID();
+import {fail} from './errors.js';
 export const themes=['ivory','sage','porcelain','rose','noir'];
 export function boardTheme(b){return themes.includes(b.theme)?b.theme:b.background?'custom':'ivory';}
 export const layouts = ['wall','grid','columns','stream'];

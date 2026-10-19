@@ -1,4 +1,4 @@
-import {fail} from './store.js';
+import {fail} from './errors.js';
 const youtubeHosts=new Set(['youtube.com','www.youtube.com','m.youtube.com','music.youtube.com','youtube-nocookie.com','www.youtube-nocookie.com']);
 function startSeconds(value){
   if(!value)return 0;
